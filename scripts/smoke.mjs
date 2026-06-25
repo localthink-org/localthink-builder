@@ -78,4 +78,24 @@ if (!zhDoc.includes('summary: "這份 LTF 文件保存了「ByteDance 全球化�
   throw new Error("Smoke test failed. Chinese summary should ignore leading URLs.");
 }
 
+const unusualLineDoc = buildLtfDocument(
+  {
+    title: "Unusual\u2028Title",
+    platform: "chatgpt",
+    tags: "alpha\u2029beta"
+  },
+  [
+    { role: "human", text: "1. 核心技术违规出口\u2028Manus 的核心 AI 技术" },
+    { role: "assistant", text: "已改成普通换行\u2029不会触发编辑器警告" }
+  ]
+);
+
+if (/[\u2028\u2029]/.test(unusualLineDoc)) {
+  throw new Error("Smoke test failed. LTF output should not contain unusual line terminators.");
+}
+
+if (!unusualLineDoc.includes("1. 核心技术违规出口\nManus 的核心 AI 技术")) {
+  throw new Error("Smoke test failed. U+2028 should be preserved as a normal newline in turn text.");
+}
+
 console.log("Smoke test passed.");

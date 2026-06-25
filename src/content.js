@@ -443,6 +443,7 @@
 
   function cleanText(value) {
     return String(value || "")
+      .replace(/[\u2028\u2029]/g, "\n")
       .replace(/\u00a0/g, " ")
       .replace(/\ufffc/g, "")
       .replace(/[ \t]+\n/g, "\n")
@@ -825,6 +826,7 @@
 
   function cleanMarkdown(value) {
     return String(value || "")
+      .replace(/[\u2028\u2029]/g, "\n")
       .replace(/\u00a0/g, " ")
       .replace(/\ufffc/g, "")
       .replace(/\b(?:Viewed a file|Created \d+ files?|Created a file|Ran a command|Read a file|Searched the web)(?:,\s*(?:viewed a file|created \d+ files?|created a file|ran a command|read a file))*\b/gi, "")

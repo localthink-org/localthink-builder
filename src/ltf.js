@@ -2,7 +2,7 @@ export function buildLtfDocument(metadata, turns) {
   const cleanTurns = Array.isArray(turns) ? turns.filter((turn) => turn.text?.trim()) : [];
   const frontmatter = buildFrontmatter(metadata, cleanTurns);
   const body = buildBody(metadata, cleanTurns);
-  return `${frontmatter}\n\n${body}\n`;
+  return normalizeLineTerminators(`${frontmatter}\n\n${body}\n`);
 }
 
 export function suggestFilename(title) {
@@ -11,7 +11,7 @@ export function suggestFilename(title) {
 }
 
 export function slugify(value) {
-  return String(value || "")
+  return normalizeLineTerminators(value)
     .normalize("NFKD")
     .replace(/[\u0300-\u036f]/g, "")
     .toLowerCase()
@@ -23,8 +23,9 @@ export function slugify(value) {
 }
 
 export function detectLanguage(text) {
-  if (/[\u4e00-\u9fff]/.test(text)) {
-    if (/[开说发项变现与战这为逻辑经典独]/.test(text)) {
+  const value = normalizeLineTerminators(text);
+  if (/[\u4e00-\u9fff]/.test(value)) {
+    if (/[开说发项变现与战这为逻辑经典独]/.test(value)) {
       return "zh-CN";
     }
     return "zh-TW";
@@ -33,7 +34,7 @@ export function detectLanguage(text) {
 }
 
 export function titleFromDocumentTitle(title) {
-  return String(title || "")
+  return normalizeScalar(title)
     .replace(/\s*[-|]\s*ChatGPT\s*$/i, "")
     .replace(/^ChatGPT\s*[-|]\s*/i, "")
     .trim() || "ChatGPT Conversation";
@@ -96,11 +97,11 @@ function buildFrontmatter(metadata, turns) {
 
 function buildBody(metadata, turns) {
   const lines = [
-    `# ${metadata.title || "ChatGPT Conversation"}`,
+    `# ${normalizeScalar(metadata.title) || "ChatGPT Conversation"}`,
     "",
     "## Conversation",
     "",
-    `### Session: ${metadata.created || today()}`,
+    `### Session: ${normalizeScalar(metadata.created) || today()}`,
     ""
   ];
 
@@ -126,15 +127,14 @@ function speakerLabel(role) {
 }
 
 function formatTurnText(text) {
-  return String(text || "")
-    .replace(/\r\n/g, "\n")
+  return normalizeLineTerminators(text)
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
 
 function buildSummary(metadata, turns) {
   const count = turns.length;
-  const title = String(metadata.title || "").trim();
+  const title = normalizeScalar(metadata.title);
   const firstHuman = turns.find((turn) => turn.role === "human")?.text || "";
   const topic = firstMeaningfulTopic(firstHuman) || title;
   const language = detectLanguage(turns.map((turn) => turn.text).join("\n"));
@@ -155,7 +155,7 @@ function buildSummary(metadata, turns) {
 }
 
 function firstMeaningfulTopic(text) {
-  return String(text || "")
+  return normalizeLineTerminators(text)
     .replace(/https?:\/\/\S+/gi, " ")
     .split(/\n|。|\.|\?|？/)
     .map((part) => part.replace(/\s+/g, " ").trim())
@@ -163,7 +163,7 @@ function firstMeaningfulTopic(text) {
 }
 
 function parseTags(value) {
-  return String(value || "")
+  return normalizeLineTerminators(value)
     .split(",")
     .map((tag) => tag.trim())
     .filter(Boolean);
@@ -174,8 +174,9 @@ function add(lines, key, value) {
 }
 
 function addRaw(lines, key, value) {
-  if (value !== undefined && value !== null && value !== "") {
-    lines.push(`${key}: ${value}`);
+  const normalized = typeof value === "string" ? normalizeScalar(value) : value;
+  if (normalized !== undefined && normalized !== null && normalized !== "") {
+    lines.push(`${key}: ${normalized}`);
   }
 }
 
@@ -192,7 +193,20 @@ function addList(lines, key, values) {
 }
 
 function quote(value) {
-  return `"${String(value ?? "").replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+  return `"${normalizeScalar(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
+function normalizeLineTerminators(value) {
+  return String(value ?? "")
+    .replace(/\r\n/g, "\n")
+    .replace(/\r/g, "\n")
+    .replace(/[\u2028\u2029]/g, "\n");
+}
+
+function normalizeScalar(value) {
+  return normalizeLineTerminators(value)
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function today() {
