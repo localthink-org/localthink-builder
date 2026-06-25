@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128" role="img" aria-label="LocalThink">
+  <rect width="128" height="128" rx="28" fill="#101418"/>
+  <path d="M33 31h42c13.8 0 25 11.2 25 25v41H58c-13.8 0-25-11.2-25-25V31Z" fill="#f6f1e8"/>
+  <path d="M52 52h37v11H64v31H52V52Z" fill="#101418"/>
+  <path d="M40 40h48v11H51v37H40V40Z" fill="#2d7ff9"/>
+</svg>
+

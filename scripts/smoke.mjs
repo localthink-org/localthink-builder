@@ -1,0 +1,81 @@
+import { buildLtfDocument, suggestFilename } from "../src/ltf.js";
+
+const doc = buildLtfDocument(
+  {
+    title: "Test Conversation",
+    created: "2026-05-18",
+    updated: "2026-05-18T12:00:00-04:00",
+    platform: "chatgpt",
+    language: "en",
+    visibility: "private",
+    tags: "LocalThink, test",
+    captureQuality: {
+    turnCount: 2,
+    humanTurns: 1,
+    assistantTurns: 1,
+    codeBlocks: 0,
+    captureStrategy: "visible-dom",
+    sameRoleAdjacency: 0,
+    roleImbalance: 0,
+    turnMin: 1,
+    turnMax: 2,
+    missingTurnCount: 0,
+    scrollComplete: true,
+    scrollSteps: 4,
+    scrollTop: 1200,
+    scrollHeight: 1200
+  }
+  },
+  [
+    { role: "human", text: "Hello" },
+    { role: "assistant", text: "Hi" }
+  ]
+);
+
+const required = [
+  'localthink: "1.0"',
+  "created: 2026-05-18",
+  "platform: chatgpt",
+  "language: en",
+  "source: builder",
+  'x_builder: "browser-extension"',
+  "x_capture_turns: 2",
+  'x_capture_strategy: "visible-dom"',
+  "x_capture_turn_min: 1",
+  "x_capture_turn_max: 2",
+  "x_capture_scroll_complete: true",
+  "x_capture_scroll_steps: 4",
+  "**Human:** Hello",
+  "**AI:** Hi"
+];
+
+for (const fragment of required) {
+  if (!doc.includes(fragment)) {
+    throw new Error(`Smoke test failed. Missing: ${fragment}`);
+  }
+}
+
+if (suggestFilename("Test Conversation") !== "test-conversation.ltf.md") {
+  throw new Error("Smoke test failed. Filename suggestion mismatch.");
+}
+
+if (suggestFilename("开源项目变现：机遇与挑战") !== "开源项目变现-机遇与挑战.ltf.md") {
+  throw new Error("Smoke test failed. Unicode filename suggestion mismatch.");
+}
+
+const zhDoc = buildLtfDocument(
+  {
+    title: "ByteDance 全球化架构分析",
+    platform: "chatgpt"
+  },
+  [
+    { role: "human", text: "https://www.bytedance.com/en/ 討論一下bytedance的全球化公司架構" },
+    { role: "assistant", text: "好的" }
+  ]
+);
+
+if (!zhDoc.includes('summary: "這份 LTF 文件保存了「ByteDance 全球化架构分析」，共 2 個回合。主題從「討論一下bytedance的全球化公司架構」開始')) {
+  throw new Error("Smoke test failed. Chinese summary should ignore leading URLs.");
+}
+
+console.log("Smoke test passed.");

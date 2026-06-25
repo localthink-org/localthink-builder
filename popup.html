@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>LTF Builder</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <header class="header">
+        <div>
+          <h1>LocalThink</h1>
+          <p>Export this conversation as `.ltf.md`.</p>
+        </div>
+        <span id="statusPill" class="pill">Ready</span>
+      </header>
+
+      <section class="actions">
+        <button id="captureButton" type="button">Capture</button>
+        <button id="downloadButton" type="button" disabled>Download .ltf.md</button>
+      </section>
+
+      <section class="form" aria-label="LTF metadata">
+        <label>
+          <span>Title</span>
+          <input id="titleInput" type="text" placeholder="Conversation title" />
+        </label>
+
+        <div class="grid">
+          <label>
+            <span>Created</span>
+            <input id="createdInput" type="text" />
+          </label>
+          <label>
+            <span>Updated</span>
+            <input id="updatedInput" type="text" />
+          </label>
+        </div>
+
+        <div class="grid">
+          <label>
+            <span>Project</span>
+            <input id="projectInput" type="text" placeholder="Optional" />
+          </label>
+          <label>
+            <span>Project ID</span>
+            <input id="projectIdInput" type="text" placeholder="optional-slug" />
+          </label>
+        </div>
+
+        <div class="grid">
+          <label>
+            <span>Language</span>
+            <input id="languageInput" type="text" value="en" />
+          </label>
+          <label>
+            <span>Visibility</span>
+            <select id="visibilityInput">
+              <option value="private">private</option>
+              <option value="unlisted">unlisted</option>
+              <option value="public">public</option>
+            </select>
+          </label>
+        </div>
+
+        <label>
+          <span>Tags</span>
+          <input id="tagsInput" type="text" placeholder="comma, separated, tags" />
+        </label>
+      </section>
+
+      <section class="summary">
+        <div><strong id="turnCount">0</strong><span> turns</span></div>
+        <div><strong id="platformName">chatgpt</strong><span> platform</span></div>
+      </section>
+
+      <section id="qualityPanel" class="quality" hidden>
+        <div class="qualityHeader">
+          <strong>Capture quality</strong>
+          <span id="qualityStatus">Not checked</span>
+        </div>
+        <ul id="qualityList"></ul>
+      </section>
+
+      <label class="previewLabel" for="previewOutput">Preview</label>
+      <textarea id="previewOutput" readonly spellcheck="false"></textarea>
+
+      <p id="message" class="message"></p>
+    </main>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>
