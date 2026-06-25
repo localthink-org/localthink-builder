@@ -11,7 +11,7 @@ const state = {
   ltf: ""
 };
 
-const CAPTURE_MESSAGE = "LOCALTHINK_CAPTURE_V5";
+const CAPTURE_MESSAGE = "LOCALTHINK_CAPTURE_V6";
 
 const elements = {
   captureButton: document.querySelector("#captureButton"),
