@@ -1,6 +1,8 @@
 # LTF Builder
 
-Chrome plugin for exporting ChatGPT web conversations as LocalThink Format (LTF) files.
+Chrome extension for exporting ChatGPT conversations as LocalThink Format (`.ltf.md`) files.
+
+[Install from the Chrome Web Store](https://chromewebstore.google.com/detail/ltf-builder/icpjoemgdpkmllkngcpndocnalodhfaj)
 
 This first public version is intentionally conservative:
 
@@ -15,23 +17,40 @@ This first public version is intentionally conservative:
 
 ---
 
-## Install Locally
+## Install
 
-1. Open Chrome.
-2. Go to `chrome://extensions`.
-3. Enable **Developer mode**.
-4. Click **Load unpacked**.
-5. Select this folder:
+Install LTF Builder from the Chrome Web Store:
+
+https://chromewebstore.google.com/detail/ltf-builder/icpjoemgdpkmllkngcpndocnalodhfaj
+
+After installation:
+
+1. Open a ChatGPT conversation.
+2. Click LTF Builder.
+3. Click **Capture**.
+4. Edit metadata if needed.
+5. Click **Download .ltf.md**.
+
+---
+
+## Local Development
+
+1. Clone this repository.
+2. Open Chrome.
+3. Go to `chrome://extensions`.
+4. Enable **Developer mode**.
+5. Click **Load unpacked**.
+6. Select this repository folder:
 
 ```text
 localthink-builder
 ```
 
-6. Open a ChatGPT conversation.
-7. Click LTF Builder.
-8. Click **Capture**.
-9. Edit metadata if needed.
-10. Click **Download .ltf.md**.
+7. Open a ChatGPT conversation.
+8. Click LTF Builder.
+9. Click **Capture**.
+10. Edit metadata if needed.
+11. Click **Download .ltf.md**.
 
 ---
 
@@ -83,9 +102,30 @@ x_capture_scroll_complete: true
 
 ---
 
+## Privacy
+
+LTF Builder does not collect, transmit, sell, or share user data.
+
+Conversation content is processed locally in the browser only after the user clicks **Capture**. The generated `.ltf.md` file is downloaded directly by the user and is not sent to LocalThink, OpenAI, analytics providers, or any third party.
+
+LTF Builder is not affiliated with OpenAI or ChatGPT.
+
+---
+
 ## Current Limitations
 
 - Only ChatGPT web conversations are supported in this first version.
 - Capture is DOM-based and optimized for ChatGPT's virtualized conversation UI, but ChatGPT DOM changes can still require adapter updates.
 - Attachments, images, generated files, and some tool outputs may be captured only as visible text.
 - Conversation creation time is not always available in the DOM, so `created` defaults to the current export date unless the user edits it.
+
+---
+
+## Links
+
+- Chrome Web Store: https://chromewebstore.google.com/detail/ltf-builder/icpjoemgdpkmllkngcpndocnalodhfaj
+- Product page: https://localthink.org/ltf-builder
+- LocalThink Format: https://github.com/localthink-org/localthink-format
+- Privacy Policy: https://localthink.ai/privacy
+- X: https://x.com/localthinkai
+- Threads: https://www.threads.com/@localthink.ai
