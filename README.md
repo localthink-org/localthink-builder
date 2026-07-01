@@ -10,7 +10,7 @@ This version is intentionally conservative:
 - runs capture only after the user clicks the extension's Capture button
 - reads conversation text from the current supported conversation page DOM
 - uses a targeted turn sweep for long virtualized ChatGPT conversations
-- uses a viewport sweep for Claude conversations
+- uses a direct DOM sweep with full-DOM completion for Claude conversations
 - converts captured turns into `.ltf.md`
 - lets the user edit metadata before export
 - downloads the generated file locally
@@ -79,7 +79,7 @@ Popup UI
   ↓ user clicks Capture
 chrome.scripting.executeScript
   ↓ inject content script into the active supported conversation tab
-ChatGPT targeted DOM capture or Claude viewport DOM capture
+ChatGPT targeted DOM capture or Claude direct DOM sweep
   ↓ deterministic serializer
 LTF markdown preview
   ↓ browser download
@@ -113,11 +113,18 @@ LTF Builder is not affiliated with OpenAI, ChatGPT, Anthropic, or Claude.
 
 ---
 
+## Validation Notes
+
+- ChatGPT long conversation export has been manually tested with a 322-turn conversation.
+- Claude long conversation export has been manually tested with a 528-turn Claude Project conversation, 575 scroll steps, and an approximately 994 KB `.ltf.md` file.
+
+---
+
 ## Current Limitations
 
 - ChatGPT and Claude web conversations are supported.
 - Capture is DOM-based and optimized for ChatGPT's virtualized conversation UI, but ChatGPT DOM changes can still require adapter updates.
-- Claude support is early and uses a generic DOM viewport sweep, so it needs real-page testing against long Claude conversations.
+- Claude support is experimental and has been manually tested with long Claude Project conversations, but Claude DOM changes can still require adapter updates.
 - Attachments, images, generated files, and some tool outputs may be captured only as visible text.
 - Conversation creation time is not always available in the DOM, so `created` defaults to the current export date unless the user edits it.
 
