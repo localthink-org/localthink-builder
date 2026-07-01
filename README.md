@@ -1,15 +1,16 @@
 # LTF Builder
 
-Chrome extension for exporting ChatGPT conversations as LocalThink Format (`.ltf.md`) files.
+Chrome extension for exporting ChatGPT and Claude conversations as LocalThink Format (`.ltf.md`) files.
 
 [Install from the Chrome Web Store](https://chromewebstore.google.com/detail/ltf-builder/icpjoemgdpkmllkngcpndocnalodhfaj)
 
-This first public version is intentionally conservative:
+This version is intentionally conservative:
 
-- supports ChatGPT web pages only
+- supports ChatGPT and Claude web pages
 - runs capture only after the user clicks the extension's Capture button
-- reads conversation text from the current ChatGPT page DOM
-- uses a targeted turn sweep to capture long virtualized ChatGPT conversations
+- reads conversation text from the current supported conversation page DOM
+- uses a targeted turn sweep for long virtualized ChatGPT conversations
+- uses a viewport sweep for Claude conversations
 - converts captured turns into `.ltf.md`
 - lets the user edit metadata before export
 - downloads the generated file locally
@@ -25,7 +26,7 @@ https://chromewebstore.google.com/detail/ltf-builder/icpjoemgdpkmllkngcpndocnalo
 
 After installation:
 
-1. Open a ChatGPT conversation.
+1. Open a ChatGPT or Claude conversation.
 2. Click LTF Builder.
 3. Click **Capture**.
 4. Edit metadata if needed.
@@ -46,7 +47,7 @@ After installation:
 localthink-builder
 ```
 
-7. Open a ChatGPT conversation.
+7. Open a ChatGPT or Claude conversation.
 8. Click LTF Builder.
 9. Click **Capture**.
 10. Edit metadata if needed.
@@ -77,8 +78,8 @@ localthink-builder/
 Popup UI
   ↓ user clicks Capture
 chrome.scripting.executeScript
-  ↓ inject content script into the active ChatGPT tab
-ChatGPT targeted DOM capture
+  ↓ inject content script into the active supported conversation tab
+ChatGPT targeted DOM capture or Claude viewport DOM capture
   ↓ deterministic serializer
 LTF markdown preview
   ↓ browser download
@@ -108,14 +109,15 @@ LTF Builder does not collect, transmit, sell, or share user data.
 
 Conversation content is processed locally in the browser only after the user clicks **Capture**. The generated `.ltf.md` file is downloaded directly by the user and is not sent to LocalThink, OpenAI, analytics providers, or any third party.
 
-LTF Builder is not affiliated with OpenAI or ChatGPT.
+LTF Builder is not affiliated with OpenAI, ChatGPT, Anthropic, or Claude.
 
 ---
 
 ## Current Limitations
 
-- Only ChatGPT web conversations are supported in this first version.
+- ChatGPT and Claude web conversations are supported.
 - Capture is DOM-based and optimized for ChatGPT's virtualized conversation UI, but ChatGPT DOM changes can still require adapter updates.
+- Claude support is early and uses a generic DOM viewport sweep, so it needs real-page testing against long Claude conversations.
 - Attachments, images, generated files, and some tool outputs may be captured only as visible text.
 - Conversation creation time is not always available in the DOM, so `created` defaults to the current export date unless the user edits it.
 

@@ -78,6 +78,47 @@ if (!zhDoc.includes('summary: "這份 LTF 文件保存了「ByteDance 全球化�
   throw new Error("Smoke test failed. Chinese summary should ignore leading URLs.");
 }
 
+const claudeDoc = buildLtfDocument(
+  {
+    title: "Claude Research Notes",
+    platform: "claude",
+    language: "en",
+    captureAdapter: "browser-extension-claude-v2.1",
+    captureQuality: {
+      turnCount: 2,
+      humanTurns: 1,
+      assistantTurns: 1,
+      codeBlocks: 0,
+      captureStrategy: "claude-visible-dom",
+      sameRoleAdjacency: 0,
+      roleImbalance: 0,
+      turnMin: 1,
+      turnMax: 2,
+      missingTurnCount: 0,
+      messageIdCount: 0,
+      turnIdCount: 0,
+      scrollComplete: true
+    }
+  },
+  [
+    { role: "human", text: "Summarize this research thread." },
+    { role: "assistant", text: "Here is a concise summary." }
+  ]
+);
+
+for (const fragment of [
+  "platform: claude",
+  'x_capture_adapter: "browser-extension-claude-v2.1"',
+  'x_capture_strategy: "claude-visible-dom"',
+  "    platform: claude",
+  "**Human:** Summarize this research thread.",
+  "**AI:** Here is a concise summary."
+]) {
+  if (!claudeDoc.includes(fragment)) {
+    throw new Error(`Smoke test failed. Missing Claude fragment: ${fragment}`);
+  }
+}
+
 const unusualLineDoc = buildLtfDocument(
   {
     title: "Unusual\u2028Title",

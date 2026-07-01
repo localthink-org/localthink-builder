@@ -1,12 +1,13 @@
 (function () {
-  const CONTENT_VERSION = "2026-06-25-chatgpt-targeted-turn-sweep-v2";
+  const CONTENT_VERSION = "2026-07-01-claude-support-v0.2";
   if (globalThis.__localthinkContentVersion === CONTENT_VERSION) return;
   globalThis.__localthinkContentVersion = CONTENT_VERSION;
   globalThis.__localthinkContentInstalled = true;
 
   const CAPTURE_MESSAGE = "LOCALTHINK_CAPTURE_V6";
   const CAPTURE_ADAPTERS = {
-    chatgpt: "browser-extension-chatgpt-v2.2"
+    chatgpt: "browser-extension-chatgpt-v2.2",
+    claude: "browser-extension-claude-v2.1"
   };
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -30,8 +31,8 @@
 
   async function captureConversation(message = {}) {
     const platform = detectPlatform();
-    if (platform !== "chatgpt") {
-      throw new Error("This version only captures ChatGPT web conversations.");
+    if (!CAPTURE_ADAPTERS[platform]) {
+      throw new Error("Open a supported ChatGPT or Claude conversation page before capturing.");
     }
     const result = await extractTurnsForPlatform(platform, message);
     const turns = Array.isArray(result) ? result : result.turns;
@@ -65,11 +66,14 @@
 
   function detectPlatform() {
     if (/(^|\.)chatgpt\.com$/i.test(location.hostname) || /^chat\.openai\.com$/i.test(location.hostname)) return "chatgpt";
+    if (/^claude\.ai$/i.test(location.hostname)) return "claude";
     return "unsupported";
   }
 
   async function extractTurnsForPlatform(platform, message = {}) {
-    return extractChatGptTurnsDeep();
+    if (platform === "chatgpt") return extractChatGptTurnsDeep();
+    if (platform === "claude") return extractClaudeTurnsDeep();
+    return { turns: [], strategy: "unsupported" };
   }
 
   async function extractChatGptTurnsDeep() {
@@ -162,7 +166,15 @@
   }
 
   function findConversationScroller() {
-    const roleNode = document.querySelector("[data-message-author-role]");
+    const roleNode = document.querySelector([
+      "[data-message-author-role]",
+      "[data-testid='user-message']",
+      "[data-testid*='human-message' i]",
+      "[data-testid*='assistant' i]",
+      ".font-claude-message",
+      ".font-claude-response",
+      "[class*='assistant-message']"
+    ].join(","));
     const candidates = [
       document.scrollingElement,
       document.documentElement,
@@ -178,6 +190,178 @@
       .sort((a, b) => b.score - a.score);
 
     return scrollable[0]?.node || document.scrollingElement || document.documentElement;
+  }
+
+  async function extractClaudeTurnsDeep() {
+    const scroller = findConversationScroller();
+    const initialTop = getScrollTop(scroller);
+
+    if (canScroll(scroller)) {
+      const directSweep = await sweepClaudeDirectTurns(scroller, initialTop);
+      if (directSweep.turns.length) return directSweep;
+    }
+
+    const directTurns = extractClaudeTurnsLegacyDirect();
+    if (directTurns.length) {
+      return {
+        turns: directTurns.map(markSequentialTurnMetadata),
+        strategy: "claude-direct-dom-v2.1",
+        adapter: CAPTURE_ADAPTERS.claude,
+        scrollComplete: true,
+        scrollSteps: 0,
+        scrollTop: Math.round(window.scrollY || document.documentElement.scrollTop || document.body.scrollTop || 0),
+        scrollHeight: Math.round(Math.max(document.documentElement.scrollHeight, document.body.scrollHeight))
+      };
+    }
+
+    const initialTurns = extractClaudeTurns({ visibleOnly: false });
+
+    if (!canScroll(scroller)) {
+      const safeTurns = safeClaudeTurns(initialTurns);
+      assertClaudeHasContent(safeTurns);
+      return {
+        turns: safeTurns.map(markSequentialTurnMetadata),
+        strategy: "claude-visible-dom",
+        adapter: CAPTURE_ADAPTERS.claude
+      };
+    }
+
+    const seen = new Set();
+    const turns = [];
+    const addVisibleTurns = () => {
+      for (const turn of extractClaudeTurns({ visibleOnly: true })) {
+        const key = turnKey(turn);
+        if (key && !seen.has(key)) {
+          seen.add(key);
+          turns.push(turn);
+        }
+      }
+    };
+
+    setScrollTop(scroller, 0);
+    await waitForRender(220);
+    addVisibleTurns();
+
+    let previousTop = -1;
+    let stableReads = 0;
+    let scrollComplete = false;
+    let scrollSteps = 0;
+    let finalScrollTop = getScrollTop(scroller);
+    let finalScrollHeight = getScrollHeight(scroller);
+    const hardMaxSteps = maxScrollSweepSteps(scroller);
+
+    for (let step = 0; step < hardMaxSteps; step += 1) {
+      const currentTop = getScrollTop(scroller);
+      const nextTop = Math.min(currentTop + scrollSweepStepSize(scroller), getScrollHeight(scroller));
+      setScrollTop(scroller, nextTop);
+      await waitForRender(180);
+      addVisibleTurns();
+
+      const actualTop = getScrollTop(scroller);
+      const atBottom = isAtBottom(scroller);
+      finalScrollTop = actualTop;
+      finalScrollHeight = getScrollHeight(scroller);
+      scrollSteps = step + 1;
+
+      if (atBottom) {
+        stableReads += 1;
+        if (stableReads >= 3) {
+          scrollComplete = true;
+          break;
+        }
+      } else if (Math.abs(actualTop - previousTop) < 2) {
+        stableReads += 1;
+        if (stableReads >= 8) break;
+      } else {
+        stableReads = 0;
+      }
+      previousTop = actualTop;
+    }
+
+    setScrollTop(scroller, initialTop);
+    const sortedTurns = turns.length ? sortCapturedTurns(turns) : initialTurns;
+    const safeTurns = safeClaudeTurns(sortedTurns);
+    assertClaudeHasContent(safeTurns);
+    return {
+      turns: safeTurns.map(markSequentialTurnMetadata),
+      strategy: turns.length ? "claude-viewport-turn-sweep" : "claude-visible-dom",
+      adapter: CAPTURE_ADAPTERS.claude,
+      scrollComplete,
+      scrollSteps,
+      scrollTop: Math.round(finalScrollTop),
+      scrollHeight: Math.round(finalScrollHeight)
+    };
+  }
+
+  async function sweepClaudeDirectTurns(scroller, initialTop) {
+    const seen = new Set();
+    const turns = [];
+    const addVisibleTurns = () => {
+      for (const turn of extractClaudeTurnsLegacyDirect({ visibleOnly: true })) {
+        const key = turnKey(turn);
+        if (key && !seen.has(key)) {
+          seen.add(key);
+          turns.push({
+            ...turn,
+            _captureOrder: turns.length
+          });
+        }
+      }
+    };
+
+    setScrollTop(scroller, 0);
+    await waitForRender(220);
+    addVisibleTurns();
+
+    let previousTop = -1;
+    let stableReads = 0;
+    let scrollComplete = false;
+    let scrollSteps = 0;
+    let finalScrollTop = getScrollTop(scroller);
+    let finalScrollHeight = getScrollHeight(scroller);
+    const hardMaxSteps = maxScrollSweepSteps(scroller);
+
+    for (let step = 0; step < hardMaxSteps; step += 1) {
+      const currentTop = getScrollTop(scroller);
+      const nextTop = Math.min(currentTop + scrollSweepStepSize(scroller), getScrollHeight(scroller));
+      setScrollTop(scroller, nextTop);
+      await waitForRender(180);
+      addVisibleTurns();
+
+      const actualTop = getScrollTop(scroller);
+      const atBottom = isAtBottom(scroller);
+      finalScrollTop = actualTop;
+      finalScrollHeight = getScrollHeight(scroller);
+      scrollSteps = step + 1;
+
+      if (atBottom) {
+        stableReads += 1;
+        if (stableReads >= 3) {
+          scrollComplete = true;
+          break;
+        }
+      } else if (Math.abs(actualTop - previousTop) < 2) {
+        stableReads += 1;
+        if (stableReads >= 8) break;
+      } else {
+        stableReads = 0;
+      }
+      previousTop = actualTop;
+    }
+
+    setScrollTop(scroller, initialTop);
+    const allDirectTurns = extractClaudeTurnsLegacyDirect();
+    const sourceTurns = allDirectTurns.length > turns.length ? allDirectTurns : turns;
+    const safeTurns = safeClaudeTurns(sourceTurns, { preserveCaptureOrder: sourceTurns === turns });
+    return {
+      turns: hasBothRoles(safeTurns) ? safeTurns.map(markSequentialTurnMetadata) : [],
+      strategy: "claude-direct-dom-sweep-v2.1",
+      adapter: CAPTURE_ADAPTERS.claude,
+      scrollComplete,
+      scrollSteps,
+      scrollTop: Math.round(finalScrollTop),
+      scrollHeight: Math.round(finalScrollHeight)
+    };
   }
 
   function canScroll(node) {
@@ -285,6 +469,342 @@
     }
 
     return [];
+  }
+
+  function extractClaudeTurns(options = {}) {
+    const candidates = [
+      ...claudeRoleNodes("[data-testid='user-message']", "human"),
+      ...claudeRoleNodes("[data-testid*='human-message' i]", "human"),
+      ...claudeRoleNodes("[data-testid='assistant-message']", "assistant"),
+      ...claudeRoleNodes("[data-testid*='assistant' i]", "assistant"),
+      ...claudeRoleNodes(".font-claude-message", "assistant"),
+      ...claudeRoleNodes(".font-claude-response", "assistant"),
+      ...claudeRoleNodes("[class*='assistant-message']", "assistant")
+    ];
+
+    const unique = dedupeTurnCandidates(candidates)
+      .filter((candidate) => !options.visibleOnly || isInCaptureWindow(candidate.container))
+      .filter((candidate) => !isClaudeAppChrome(candidate.container))
+      .filter((candidate) => candidate.role === "human" || !isInsideUserMessage(candidate.node))
+      .map((candidate, index) => {
+        const text = markdownFromNode(candidate.node);
+        if (!isUsefulTurn(text)) return null;
+        const absoluteTop = absoluteTopForNode(candidate.container);
+        return {
+          role: candidate.role,
+          text,
+          _turnNumber: Number.POSITIVE_INFINITY,
+          _absoluteTop: absoluteTop,
+          _messageId: candidate.node.getAttribute("data-message-id") || candidate.container.getAttribute?.("data-message-id") || "",
+          _turnId: candidate.container.getAttribute?.("data-testid") || "",
+          _captureKey: claudeCaptureKey(candidate, text, index, absoluteTop)
+        };
+      })
+      .filter(Boolean)
+      .sort(compareCapturedTurns);
+
+    if (unique.length) return unique;
+
+    const articleTurns = extractClaudeTurnsFromArticles(options);
+    if (articleTurns.length) return articleTurns;
+
+    return extractClaudeTurnsFromMainText(options);
+  }
+
+  function extractClaudeTurnsLegacyDirect(options = {}) {
+    const candidates = [
+      ...Array.from(document.querySelectorAll("[data-testid='user-message'], [data-testid*='human-message' i]"))
+        .map((node) => ({ role: "human", node })),
+      ...Array.from(document.querySelectorAll([
+        "[data-testid*='assistant' i]",
+        ".font-claude-response",
+        "[class*='assistant-message']"
+      ].join(",")))
+        .map((node) => ({ role: "assistant", node }))
+    ];
+
+    const direct = uniqueCandidates(candidates)
+      .filter(({ node }) => !isClaudeAppChrome(node))
+      .filter(({ node }) => !options.visibleOnly || isInCaptureWindow(node))
+      .sort((a, b) => documentPosition(a.node, b.node))
+      .filter(({ role, node }) => role === "human" || !isInsideUserMessage(node))
+      .map(({ role, node }) => ({
+        role,
+        text: markdownFromNode(node),
+        _turnNumber: Number.POSITIVE_INFINITY,
+        _absoluteTop: absoluteTopForNode(node),
+        _messageId: node.getAttribute("data-message-id") || "",
+        _turnId: node.getAttribute("data-testid") || ""
+      }))
+      .filter((turn) => isUsefulTurn(turn.text));
+
+    const collapsed = collapseAdjacentSameRole(direct);
+    if (hasBothRoles(collapsed)) return collapsed;
+
+    const lenient = uniqueCandidates(candidates)
+      .filter(({ node }) => !options.visibleOnly || isInCaptureWindow(node))
+      .sort((a, b) => documentPosition(a.node, b.node))
+      .filter(({ role, node }) => role === "human" || !isInsideUserMessage(node))
+      .map(({ role, node }) => ({
+        role,
+        text: markdownFromNode(node),
+        _turnNumber: Number.POSITIVE_INFINITY,
+        _absoluteTop: absoluteTopForNode(node),
+        _messageId: node.getAttribute("data-message-id") || "",
+        _turnId: node.getAttribute("data-testid") || ""
+      }))
+      .filter((turn) => isUsefulTurn(turn.text));
+
+    const lenientCollapsed = collapseAdjacentSameRole(lenient);
+    if (hasBothRoles(lenientCollapsed)) return lenientCollapsed;
+    return [];
+  }
+
+  function claudeRoleNodes(selector, role) {
+    return Array.from(document.querySelectorAll(selector))
+      .filter((node) => node instanceof HTMLElement)
+      .map((node) => ({
+        node,
+        role,
+        container: claudeTurnContainer(node)
+      }));
+  }
+
+  function claudeTurnContainer(node) {
+    return node.closest("[data-testid^='conversation-turn'], [data-testid*='message'], article, main li, main section") || node;
+  }
+
+  function dedupeTurnCandidates(candidates) {
+    const sorted = candidates
+      .filter((candidate) => candidate.node && candidate.container)
+      .sort((a, b) => absoluteTopForNode(a.container) - absoluteTopForNode(b.container));
+    const result = [];
+
+    for (const candidate of sorted) {
+      const text = cleanText(candidate.node.textContent || "");
+      if (!text) continue;
+      const duplicate = result.some((existing) => {
+        if (existing.role !== candidate.role) return false;
+        const existingText = cleanText(existing.node.textContent || "");
+        if (existing.node === candidate.node || existing.node.contains(candidate.node) || candidate.node.contains(existing.node)) return true;
+        const topDiff = Math.abs(absoluteTopForNode(existing.container) - absoluteTopForNode(candidate.container));
+        if (topDiff > 12) return false;
+        return existingText === text || existingText.includes(text) || text.includes(existingText);
+      });
+      if (!duplicate) result.push(candidate);
+    }
+    return result;
+  }
+
+  function extractClaudeTurnsFromArticles(options = {}) {
+    const articles = Array.from(document.querySelectorAll("main article, main [role='article']"));
+    return articles
+      .map((article, index) => {
+        if (options.visibleOnly && !isInCaptureWindow(article)) return null;
+        if (isClaudeAppChrome(article)) return null;
+        const text = markdownFromNode(article);
+        if (!isUsefulTurn(text)) return null;
+        const role = inferClaudeRole(article, index);
+        const absoluteTop = absoluteTopForNode(article);
+        return {
+          role,
+          text,
+          _turnNumber: Number.POSITIVE_INFINITY,
+          _absoluteTop: absoluteTop,
+          _messageId: article.getAttribute("data-message-id") || "",
+          _turnId: article.getAttribute("data-testid") || "",
+          _captureKey: `claude-article:${role}:${Math.round(absoluteTop / 20)}:${cleanText(text).slice(0, 200)}`
+        };
+      })
+      .filter(Boolean)
+      .sort(compareCapturedTurns);
+  }
+
+  function extractClaudeTurnsFromMainText(options = {}) {
+    const main = document.querySelector("main, [role='main']") || document.body;
+    const blocks = Array.from(main.querySelectorAll([
+      "[data-testid]",
+      "[class*='message' i]",
+      "[class*='prose' i]",
+      "[class*='markdown' i]",
+      "[class*='font-claude' i]",
+      "article",
+      "section",
+      "li",
+      "div"
+    ].join(",")))
+      .filter((node) => node instanceof HTMLElement)
+      .filter((node) => !isClaudeAppChrome(node))
+      .filter((node) => !isClaudeComposerChrome(node))
+      .filter((node) => !options.visibleOnly || isInCaptureWindow(node))
+      .filter((node) => isClaudeLeafTextBlock(node))
+      .sort((a, b) => absoluteTopForNode(a) - absoluteTopForNode(b));
+
+    const candidates = [];
+    for (const node of blocks) {
+      const text = markdownFromNode(node);
+      if (!isUsefulTurn(text)) continue;
+      const absoluteTop = absoluteTopForNode(node);
+      const duplicate = candidates.some((candidate) => {
+        const topDiff = Math.abs(candidate._absoluteTop - absoluteTop);
+        if (topDiff > 16) return false;
+        return candidate.text === text || candidate.text.includes(text) || text.includes(candidate.text);
+      });
+      if (duplicate) continue;
+      candidates.push({
+        role: inferClaudeRole(node, candidates.length),
+        text,
+        _turnNumber: Number.POSITIVE_INFINITY,
+        _absoluteTop: absoluteTop,
+        _messageId: node.getAttribute("data-message-id") || "",
+        _turnId: node.getAttribute("data-testid") || "",
+        _captureKey: `claude-main:${Math.round(absoluteTop / 20)}:${candidates.length}:${cleanText(text).slice(0, 200)}`
+      });
+    }
+
+    return candidates;
+  }
+
+  function isClaudeLeafTextBlock(node) {
+    const text = cleanText(node.innerText || node.textContent || "");
+    if (text.length < 2) return false;
+    if (text.length > 12000) return false;
+    if (looksLikeClaudeBoundaryChrome(text) || looksLikeAppChromeText(text)) return false;
+    const textChildren = Array.from(node.children).filter((child) => {
+      if (!(child instanceof HTMLElement)) return false;
+      if (isClaudeComposerChrome(child) || isClaudeAppChrome(child)) return false;
+      return cleanText(child.innerText || child.textContent || "").length >= Math.min(120, Math.max(8, text.length * 0.8));
+    });
+    return textChildren.length === 0;
+  }
+
+  function inferClaudeRole(node, index) {
+    const value = [
+      node.getAttribute("data-testid"),
+      node.getAttribute("aria-label"),
+      node.className,
+      node.closest("[data-testid]")?.getAttribute("data-testid")
+    ].filter(Boolean).join(" ");
+    if (/user|human|you/i.test(value)) return "human";
+    if (/assistant|claude|message/i.test(value)) return "assistant";
+    return index % 2 === 0 ? "human" : "assistant";
+  }
+
+  function claudeCaptureKey(candidate, text, index, absoluteTop) {
+    const id = candidate.node.getAttribute("data-message-id") ||
+      candidate.container.getAttribute?.("data-message-id") ||
+      "";
+    if (id) return `claude:${id}:${candidate.role}:${cleanText(text).slice(0, 120)}`;
+    return `claude:${candidate.role}:${Math.round(absoluteTop / 20)}:${index}:${cleanText(text).slice(0, 200)}`;
+  }
+
+  function assertClaudeHasContent(turns) {
+    if (!turns.length || turns.every((turn) => looksLikeClaudeBoundaryChrome(turn.text))) {
+      throw new Error(`Claude capture could not find conversation text. ${claudeDomDiagnostics()} Scroll the conversation into view, wait for Claude to finish rendering, then try again.`);
+    }
+  }
+
+  function claudeDomDiagnostics() {
+    const main = document.querySelector("main, [role='main']");
+    const direct = claudeDirectDiagnostics();
+    const counts = [
+      `user=${document.querySelectorAll("[data-testid='user-message'], [data-testid*='human-message' i]").length}`,
+      `assistant=${document.querySelectorAll("[data-testid='assistant-message'], [data-testid*='assistant' i], .font-claude-message, .font-claude-response, [class*='assistant-message']").length}`,
+      `article=${document.querySelectorAll("main article, main [role='article']").length}`,
+      `mainText=${cleanText(main?.innerText || main?.textContent || "").length}`,
+      `direct=${direct}`
+    ];
+    return `Diagnostics: ${counts.join(", ")}.`;
+  }
+
+  function claudeDirectDiagnostics() {
+    const candidates = [
+      ...Array.from(document.querySelectorAll("[data-testid='user-message'], [data-testid*='human-message' i]"))
+        .map((node) => ({ role: "human", node })),
+      ...Array.from(document.querySelectorAll([
+        "[data-testid*='assistant' i]",
+        ".font-claude-response",
+        "[class*='assistant-message']"
+      ].join(",")))
+        .map((node) => ({ role: "assistant", node }))
+    ];
+    const usable = uniqueCandidates(candidates)
+      .filter(({ role, node }) => role === "human" || !isInsideUserMessage(node))
+      .map(({ role, node }) => ({ role, text: markdownFromNode(node) }))
+      .filter((turn) => isUsefulTurn(turn.text));
+    return `${candidates.length}/${usable.length}/${usable.filter((turn) => turn.role === "human").length}/${usable.filter((turn) => turn.role === "assistant").length}`;
+  }
+
+  function safeClaudeTurns(turns, options = {}) {
+    const ordered = (options.preserveCaptureOrder ? turns.slice().sort(compareCaptureOrder) : sortCapturedTurns(turns))
+      .filter((turn) => isUsefulTurn(turn.text));
+    return trimClaudeChromeBoundaries(collapseAdjacentSameRole(ordered));
+  }
+
+  function compareCaptureOrder(a, b) {
+    const orderDiff = (a._captureOrder ?? Number.POSITIVE_INFINITY) - (b._captureOrder ?? Number.POSITIVE_INFINITY);
+    if (orderDiff) return orderDiff;
+    return compareCapturedTurns(a, b);
+  }
+
+  function trimClaudeChromeBoundaries(turns) {
+    let start = 0;
+    let end = turns.length;
+    while (start < end && looksLikeClaudeBoundaryChrome(turns[start]?.text)) start += 1;
+    while (end > start && looksLikeClaudeBoundaryChrome(turns[end - 1]?.text)) end -= 1;
+    return turns.slice(start, end);
+  }
+
+  function looksLikeClaudeBoundaryChrome(text) {
+    const value = cleanText(text || "");
+    if (!value) return true;
+    if (value.length <= 80 && /^(Claude|Projects|Recents|Chats|Artifacts|Settings|New chat|Upgrade)\b/i.test(value)) return true;
+    return /Search⌘K|Chats\]\(\/recents\)|Projects\]\(\/projects\)|Artifacts\]\(\/artifacts|Recent chats|Free plan/i.test(value);
+  }
+
+  function isClaudeAppChrome(node) {
+    return Boolean(node?.closest?.([
+      "nav",
+      "aside",
+      "header",
+      "[role='navigation']",
+      "[aria-label*='sidebar' i]",
+      "[aria-label*='navigation' i]",
+      "[data-testid*='sidebar' i]",
+      "[data-testid*='nav' i]",
+      "[data-testid*='history' i]",
+      "[class*='sidebar']",
+      "[class*='Sidebar']",
+      "[class*='navigation']",
+      "[class*='Navigation']"
+    ].join(",")));
+  }
+
+  function isClaudeComposerChrome(node) {
+    return Boolean(node?.closest?.([
+      "form",
+      "textarea",
+      "[contenteditable='true']",
+      "[role='textbox']",
+      "[data-testid*='composer' i]",
+      "[data-testid*='input' i]",
+      "[aria-label*='Message' i]",
+      "[aria-label*='prompt' i]",
+      "[class*='composer' i]",
+      "[class*='input' i]"
+    ].join(",")));
+  }
+
+  function isInsideUserMessage(node) {
+    return Boolean(node?.closest?.("[data-testid*='user-message' i], [data-testid*='human' i], [data-testid*='user' i]"));
+  }
+
+  function isSuspiciousClaudeCapture(turns) {
+    const firstText = turns.slice(0, 8).map((turn) => turn.text).join("\n");
+    if (looksLikeAppChromeText(firstText)) return true;
+    const firstTurn = cleanText(turns[0]?.text || "");
+    if (looksLikeClaudeBoundaryChrome(firstTurn)) return true;
+    return false;
   }
 
   function turnFromRoleNode(node, index, options) {
@@ -411,8 +931,46 @@
     return cleanTurn;
   }
 
+  function markSequentialTurnMetadata(turn, index) {
+    const cleanTurn = stripCaptureFields(turn);
+    cleanTurn.captureTurnNumber = index + 1;
+    if (turn._messageId) cleanTurn.captureMessageId = turn._messageId;
+    if (turn._turnId) cleanTurn.captureTurnId = turn._turnId;
+    return cleanTurn;
+  }
+
   function hasBothRoles(turns) {
     return turns.some((turn) => turn.role === "human") && turns.some((turn) => turn.role === "assistant");
+  }
+
+  function collapseAdjacentSameRole(turns) {
+    const collapsed = [];
+    for (const turn of turns) {
+      const previous = collapsed[collapsed.length - 1];
+      if (previous?.role === turn.role) {
+        previous.text = `${previous.text}\n\n${turn.text}`;
+        previous._absoluteTop = Math.min(previous._absoluteTop ?? Number.POSITIVE_INFINITY, turn._absoluteTop ?? Number.POSITIVE_INFINITY);
+        previous._messageId = previous._messageId || turn._messageId || "";
+        previous._turnId = previous._turnId || turn._turnId || "";
+      } else {
+        collapsed.push({ ...turn });
+      }
+    }
+    return collapsed;
+  }
+
+  function uniqueCandidates(candidates) {
+    const seen = new Set();
+    return candidates.filter((candidate) => {
+      if (!candidate.node || seen.has(candidate.node)) return false;
+      seen.add(candidate.node);
+      return true;
+    });
+  }
+
+  function documentPosition(a, b) {
+    if (a === b) return 0;
+    return a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_PRECEDING ? 1 : -1;
   }
 
   function isUsefulTurn(text) {
@@ -843,6 +1401,10 @@
 
   function detectModel(platform) {
     const text = document.body.innerText || "";
+    if (platform === "claude") {
+      const claudeMatch = text.match(/\bClaude(?:\s+(?:Opus|Sonnet|Haiku))?(?:\s+\d(?:\.\d)?)?\b/i);
+      return claudeMatch?.[0];
+    }
     const match = text.match(/\bGPT-?5(?:\.\d+)?\b|\bGPT-?4(?:\.\d+|o)?\b|\bo[134]\b/i);
     return match?.[0];
   }
@@ -853,7 +1415,7 @@
     const assistantTurns = turns.filter((turn) => turn.role === "assistant").length;
     const codeBlocks = (text.match(/```/g) || []).length / 2;
     const unbalancedCodeFence = (text.match(/```/g) || []).length % 2 !== 0;
-    const possibleVirtualization = options.platform === "chatgpt" &&
+    const possibleVirtualization = (options.platform === "chatgpt" || options.platform === "claude") &&
       turns.length <= 8 &&
       document.body.innerText.length > 5000;
     const roleImbalance = Math.abs(humanTurns - assistantTurns);
@@ -863,14 +1425,20 @@
     const warnings = [];
 
     if (!humanTurns || !assistantTurns) warnings.push("Could not clearly identify both human and AI turns.");
+    if (options.platform === "claude" && isSuspiciousClaudeCapture(turns)) {
+      warnings.push("Claude capture may include app navigation or may have missed one side of the conversation. Review the preview before saving.");
+    }
     if (unbalancedCodeFence) warnings.push("Captured markdown has an unbalanced code fence.");
     if (options.platform === "chatgpt" && options.scrollComplete === false) {
       warnings.push(`ChatGPT DOM sweep stopped before reaching the page bottom (${options.scrollSteps || 0} steps, ${Math.round(options.scrollTop || 0)}/${Math.round(options.scrollHeight || 0)}px). Capture again after letting the page finish scrolling.`);
     }
-    if (possibleVirtualization) warnings.push("Only the currently rendered ChatGPT messages may have been captured. Scroll the conversation, wait for older messages to load, and capture again.");
+    if (options.platform === "claude" && options.scrollComplete === false) {
+      warnings.push(`Claude DOM sweep stopped before reaching the page bottom (${options.scrollSteps || 0} steps, ${Math.round(options.scrollTop || 0)}/${Math.round(options.scrollHeight || 0)}px). Capture again after letting the page finish scrolling.`);
+    }
+    if (possibleVirtualization) warnings.push(`Only the currently rendered ${platformLabel(options.platform)} messages may have been captured. Scroll the conversation, wait for older messages to load, and capture again.`);
     if (sameRoleAdjacency) warnings.push(`Detected ${sameRoleAdjacency} adjacent same-role turn pairs. Review for missed or mismatched turns.`);
     if (roleImbalance > 1) warnings.push(`Human/AI turn count is imbalanced by ${roleImbalance}. Review the preview before saving.`);
-    if (turnSequence.missingCount) warnings.push(`Detected ${turnSequence.missingCount} missing ChatGPT turn numbers within the captured range.`);
+    if (turnSequence.missingCount) warnings.push(`Detected ${turnSequence.missingCount} missing ${platformLabel(options.platform)} turn numbers within the captured range.`);
     if (turns.length > 200) warnings.push("A very high number of turns was captured. Review the preview for app navigation or history entries.");
     if (looksLikeAppChromeText(text)) warnings.push("Possible app navigation or sidebar text was captured. Review the preview before saving.");
 
@@ -896,6 +1464,12 @@
       scrollHeight: Math.round(options.scrollHeight || 0),
       warnings
     };
+  }
+
+  function platformLabel(platform) {
+    if (platform === "claude") return "Claude";
+    if (platform === "chatgpt") return "ChatGPT";
+    return "AI";
   }
 
   function countSameRoleAdjacency(turns) {
@@ -960,9 +1534,11 @@
   function cleanTitle(title) {
     return String(title || "")
       .replace(/\s*[-|]\s*ChatGPT\s*$/i, "")
+      .replace(/\s*[-|]\s*Claude\s*$/i, "")
       .replace(/\s*[-|]\s*Google Gemini\s*$/i, "")
       .replace(/^ChatGPT\s*[-|]\s*/i, "")
+      .replace(/^Claude\s*[-|]\s*/i, "")
       .replace(/^Google Gemini\s*[-|]\s*/i, "")
-      .trim() || "ChatGPT Conversation";
+      .trim() || "AI Conversation";
   }
 })();

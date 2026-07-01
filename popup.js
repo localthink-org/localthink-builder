@@ -83,8 +83,8 @@ async function captureConversation() {
 
 async function sendCaptureMessage(tabId) {
   const tab = await chrome.tabs.get(tabId);
-  if (!isSupportedChatGptUrl(tab.url || "")) {
-    throw new Error("Open a ChatGPT conversation page before capturing.");
+  if (!isSupportedConversationUrl(tab.url || "")) {
+    throw new Error("Open a supported ChatGPT or Claude conversation page before capturing.");
   }
 
   await chrome.scripting.executeScript({
@@ -96,10 +96,12 @@ async function sendCaptureMessage(tabId) {
   });
 }
 
-function isSupportedChatGptUrl(tabUrl) {
+function isSupportedConversationUrl(tabUrl) {
   try {
     const url = new URL(tabUrl);
-    return /(^|\.)chatgpt\.com$/i.test(url.hostname) || /^chat\.openai\.com$/i.test(url.hostname);
+    return /(^|\.)chatgpt\.com$/i.test(url.hostname) ||
+      /^chat\.openai\.com$/i.test(url.hostname) ||
+      /^claude\.ai$/i.test(url.hostname);
   } catch (_error) {
     return false;
   }
@@ -125,11 +127,12 @@ function populateFromCapture(capture) {
 }
 
 function metadataFromForm() {
+  const platform = state.capture?.platform || "chatgpt";
   return {
-    title: elements.titleInput.value.trim() || "ChatGPT Conversation",
+    title: elements.titleInput.value.trim() || defaultTitleForPlatform(platform),
     created: elements.createdInput.value.trim(),
     updated: elements.updatedInput.value.trim(),
-    platform: state.capture?.platform || "chatgpt",
+    platform,
     model: state.capture?.model || "",
     language: elements.languageInput.value.trim() || "en",
     project: elements.projectInput.value.trim(),
@@ -141,6 +144,12 @@ function metadataFromForm() {
     captureAdapter: state.capture?.captureAdapter || "",
     captureQuality: state.capture?.quality
   };
+}
+
+function defaultTitleForPlatform(platform) {
+  if (platform === "claude") return "Claude Conversation";
+  if (platform === "chatgpt") return "ChatGPT Conversation";
+  return "AI Conversation";
 }
 
 function renderQuality(quality) {
@@ -161,7 +170,7 @@ function renderQuality(quality) {
     `${quality.codeBlocks} code blocks preserved`
   ];
   if (quality.turnMin && quality.turnMax) {
-    items.push(`ChatGPT turn range: ${quality.turnMin}-${quality.turnMax}`);
+    items.push(`Captured turn range: ${quality.turnMin}-${quality.turnMax}`);
   }
   if (quality.missingTurnCount) {
     items.push(`Missing turn numbers: ${quality.missingTurnCount}${quality.missingTurnRanges ? ` (${quality.missingTurnRanges})` : ""}`);

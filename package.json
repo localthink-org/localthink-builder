@@ -1,7 +1,7 @@
 {
   "name": "localthink-builder",
-  "version": "0.1.0",
-  "description": "Chrome extension for exporting ChatGPT conversations as LocalThink Format files.",
+  "version": "0.2.0",
+  "description": "Chrome extension for exporting ChatGPT and Claude conversations as LocalThink Format files.",
   "type": "module",
   "private": true,
   "scripts": {

@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "LTF Builder",
-  "description": "Export ChatGPT conversations as LocalThink Format (.ltf.md) files.",
-  "version": "0.1.0",
+  "description": "Export ChatGPT and Claude conversations as LocalThink Format (.ltf.md) files.",
+  "version": "0.2.0",
   "action": {
     "default_popup": "popup.html",
     "default_title": "LTF Builder",

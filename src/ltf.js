@@ -36,8 +36,10 @@ export function detectLanguage(text) {
 export function titleFromDocumentTitle(title) {
   return normalizeScalar(title)
     .replace(/\s*[-|]\s*ChatGPT\s*$/i, "")
+    .replace(/\s*[-|]\s*Claude\s*$/i, "")
     .replace(/^ChatGPT\s*[-|]\s*/i, "")
-    .trim() || "ChatGPT Conversation";
+    .replace(/^Claude\s*[-|]\s*/i, "")
+    .trim() || "AI Conversation";
 }
 
 function buildFrontmatter(metadata, turns) {
