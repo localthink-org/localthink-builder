@@ -84,7 +84,7 @@ async function captureConversation() {
 async function sendCaptureMessage(tabId) {
   const tab = await chrome.tabs.get(tabId);
   if (!isSupportedConversationUrl(tab.url || "")) {
-    throw new Error("Open a supported ChatGPT or Claude conversation page before capturing.");
+    throw new Error("Open a supported ChatGPT, Claude, or Gemini conversation page before capturing.");
   }
 
   await chrome.scripting.executeScript({
@@ -101,7 +101,8 @@ function isSupportedConversationUrl(tabUrl) {
     const url = new URL(tabUrl);
     return /(^|\.)chatgpt\.com$/i.test(url.hostname) ||
       /^chat\.openai\.com$/i.test(url.hostname) ||
-      /^claude\.ai$/i.test(url.hostname);
+      /^claude\.ai$/i.test(url.hostname) ||
+      /^gemini\.google\.com$/i.test(url.hostname);
   } catch (_error) {
     return false;
   }
@@ -148,6 +149,7 @@ function metadataFromForm() {
 
 function defaultTitleForPlatform(platform) {
   if (platform === "claude") return "Claude Conversation";
+  if (platform === "gemini") return "Gemini Conversation";
   if (platform === "chatgpt") return "ChatGPT Conversation";
   return "AI Conversation";
 }

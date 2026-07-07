@@ -1,4 +1,4 @@
-import { buildLtfDocument, suggestFilename } from "../src/ltf.js";
+import { buildLtfDocument, suggestFilename, titleFromDocumentTitle } from "../src/ltf.js";
 
 const doc = buildLtfDocument(
   {
@@ -117,6 +117,85 @@ for (const fragment of [
   if (!claudeDoc.includes(fragment)) {
     throw new Error(`Smoke test failed. Missing Claude fragment: ${fragment}`);
   }
+}
+
+const geminiDoc = buildLtfDocument(
+  {
+    title: "Gemini Research Notes",
+    platform: "gemini",
+    language: "en",
+    captureAdapter: "browser-extension-gemini-v0.1",
+    captureQuality: {
+      turnCount: 2,
+      humanTurns: 1,
+      assistantTurns: 1,
+      codeBlocks: 0,
+      captureStrategy: "gemini-direct-dom-sweep-v0.1",
+      sameRoleAdjacency: 0,
+      roleImbalance: 0,
+      turnMin: 1,
+      turnMax: 2,
+      missingTurnCount: 0,
+      messageIdCount: 0,
+      turnIdCount: 0,
+      scrollComplete: true,
+      scrollSteps: 6
+    }
+  },
+  [
+    { role: "human", text: "Compare local AI options." },
+    { role: "assistant", text: "Here are the main tradeoffs." }
+  ]
+);
+
+for (const fragment of [
+  "platform: gemini",
+  'x_capture_adapter: "browser-extension-gemini-v0.1"',
+  'x_capture_strategy: "gemini-direct-dom-sweep-v0.1"',
+  "x_capture_scroll_steps: 6",
+  "    platform: gemini",
+  "**Human:** Compare local AI options.",
+  "**AI:** Here are the main tradeoffs."
+]) {
+  if (!geminiDoc.includes(fragment)) {
+    throw new Error(`Smoke test failed. Missing Gemini fragment: ${fragment}`);
+  }
+}
+
+if (titleFromDocumentTitle("Gemini Research Notes - Gemini") !== "Gemini Research Notes") {
+  throw new Error("Smoke test failed. Gemini title cleanup mismatch.");
+}
+
+const jaDoc = buildLtfDocument(
+  {
+    title: "ローカルAI",
+    platform: "chatgpt",
+    language: "ja"
+  },
+  [
+    { role: "human", text: "ローカルでAIを動かす方法を教えて" },
+    { role: "assistant", text: "いくつかの方法があります。" }
+  ]
+);
+
+if (!jaDoc.includes('summary: "このLTFファイルは「ローカルAI」を保存しています。全 2 ターン。会話は「ローカルでAIを動かす方法を教えて」から始まります。"')) {
+  throw new Error("Smoke test failed. Japanese summary should use localized turn wording.");
+}
+
+const frDoc = buildLtfDocument(
+  {
+    title: "Notes IA locale",
+    platform: "chatgpt",
+    language: "fr"
+  },
+  [
+    { role: "human", text: "Comment exécuter un modèle local ?" },
+    { role: "assistant", text: "Voici une approche simple." }
+  ]
+);
+
+if (!frDoc.includes('summary: "Ce fichier LTF conserve « Notes IA locale » avec 2 tours. La conversation commence par : Comment exécuter un modèle local."')) {
+  throw new Error("Smoke test failed. French summary should use localized turn wording.");
 }
 
 const unusualLineDoc = buildLtfDocument(

@@ -1,5 +1,5 @@
 (function () {
-  const CONTENT_VERSION = "2026-07-01-claude-support-v0.2";
+  const CONTENT_VERSION = "2026-07-07-gemini-support-v0.1";
   if (globalThis.__localthinkContentVersion === CONTENT_VERSION) return;
   globalThis.__localthinkContentVersion = CONTENT_VERSION;
   globalThis.__localthinkContentInstalled = true;
@@ -7,7 +7,8 @@
   const CAPTURE_MESSAGE = "LOCALTHINK_CAPTURE_V6";
   const CAPTURE_ADAPTERS = {
     chatgpt: "browser-extension-chatgpt-v2.2",
-    claude: "browser-extension-claude-v2.1"
+    claude: "browser-extension-claude-v2.1",
+    gemini: "browser-extension-gemini-v0.1"
   };
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -32,7 +33,7 @@
   async function captureConversation(message = {}) {
     const platform = detectPlatform();
     if (!CAPTURE_ADAPTERS[platform]) {
-      throw new Error("Open a supported ChatGPT or Claude conversation page before capturing.");
+      throw new Error("Open a supported ChatGPT, Claude, or Gemini conversation page before capturing.");
     }
     const result = await extractTurnsForPlatform(platform, message);
     const turns = Array.isArray(result) ? result : result.turns;
@@ -67,12 +68,14 @@
   function detectPlatform() {
     if (/(^|\.)chatgpt\.com$/i.test(location.hostname) || /^chat\.openai\.com$/i.test(location.hostname)) return "chatgpt";
     if (/^claude\.ai$/i.test(location.hostname)) return "claude";
+    if (/^gemini\.google\.com$/i.test(location.hostname)) return "gemini";
     return "unsupported";
   }
 
   async function extractTurnsForPlatform(platform, message = {}) {
     if (platform === "chatgpt") return extractChatGptTurnsDeep();
     if (platform === "claude") return extractClaudeTurnsDeep();
+    if (platform === "gemini") return extractGeminiTurnsDeep();
     return { turns: [], strategy: "unsupported" };
   }
 
@@ -173,7 +176,9 @@
       "[data-testid*='assistant' i]",
       ".font-claude-message",
       ".font-claude-response",
-      "[class*='assistant-message']"
+      "[class*='assistant-message']",
+      "user-query",
+      "model-response"
     ].join(","));
     const candidates = [
       document.scrollingElement,
@@ -357,6 +362,104 @@
       turns: hasBothRoles(safeTurns) ? safeTurns.map(markSequentialTurnMetadata) : [],
       strategy: "claude-direct-dom-sweep-v2.1",
       adapter: CAPTURE_ADAPTERS.claude,
+      scrollComplete,
+      scrollSteps,
+      scrollTop: Math.round(finalScrollTop),
+      scrollHeight: Math.round(finalScrollHeight)
+    };
+  }
+
+  async function extractGeminiTurnsDeep() {
+    const scroller = findConversationScroller();
+    const initialTop = getScrollTop(scroller);
+
+    if (canScroll(scroller)) {
+      const directSweep = await sweepGeminiDirectTurns(scroller, initialTop);
+      if (directSweep.turns.length) return directSweep;
+    }
+
+    const directTurns = extractGeminiTurnsDirect();
+    if (directTurns.length) {
+      const safeTurns = safeGeminiTurns(directTurns);
+      assertGeminiHasContent(safeTurns);
+      return {
+        turns: safeTurns.map(markSequentialTurnMetadata),
+        strategy: "gemini-direct-dom-v0.1",
+        adapter: CAPTURE_ADAPTERS.gemini,
+        scrollComplete: true,
+        scrollSteps: 0,
+        scrollTop: Math.round(window.scrollY || document.documentElement.scrollTop || document.body.scrollTop || 0),
+        scrollHeight: Math.round(Math.max(document.documentElement.scrollHeight, document.body.scrollHeight))
+      };
+    }
+
+    throw new Error(`Gemini capture could not find conversation text. ${geminiDomDiagnostics()} Scroll the conversation into view, wait for Gemini to finish rendering, then try again.`);
+  }
+
+  async function sweepGeminiDirectTurns(scroller, initialTop) {
+    const seen = new Set();
+    const turns = [];
+    const addVisibleTurns = () => {
+      for (const turn of extractGeminiTurnsDirect({ visibleOnly: true })) {
+        const key = turnKey(turn);
+        if (key && !seen.has(key)) {
+          seen.add(key);
+          turns.push({
+            ...turn,
+            _captureOrder: turns.length
+          });
+        }
+      }
+    };
+
+    setScrollTop(scroller, 0);
+    await waitForRender(260);
+    addVisibleTurns();
+
+    let previousTop = -1;
+    let stableReads = 0;
+    let scrollComplete = false;
+    let scrollSteps = 0;
+    let finalScrollTop = getScrollTop(scroller);
+    let finalScrollHeight = getScrollHeight(scroller);
+    const hardMaxSteps = maxScrollSweepSteps(scroller);
+
+    for (let step = 0; step < hardMaxSteps; step += 1) {
+      const currentTop = getScrollTop(scroller);
+      const nextTop = Math.min(currentTop + scrollSweepStepSize(scroller), getScrollHeight(scroller));
+      setScrollTop(scroller, nextTop);
+      await waitForRender(220);
+      addVisibleTurns();
+
+      const actualTop = getScrollTop(scroller);
+      const atBottom = isAtBottom(scroller);
+      finalScrollTop = actualTop;
+      finalScrollHeight = getScrollHeight(scroller);
+      scrollSteps = step + 1;
+
+      if (atBottom) {
+        stableReads += 1;
+        if (stableReads >= 3) {
+          scrollComplete = true;
+          break;
+        }
+      } else if (Math.abs(actualTop - previousTop) < 2) {
+        stableReads += 1;
+        if (stableReads >= 8) break;
+      } else {
+        stableReads = 0;
+      }
+      previousTop = actualTop;
+    }
+
+    setScrollTop(scroller, initialTop);
+    const allDirectTurns = extractGeminiTurnsDirect();
+    const sourceTurns = allDirectTurns.length > turns.length ? allDirectTurns : turns;
+    const safeTurns = safeGeminiTurns(sourceTurns, { preserveCaptureOrder: sourceTurns === turns });
+    return {
+      turns: hasBothRoles(safeTurns) ? safeTurns.map(markSequentialTurnMetadata) : [],
+      strategy: "gemini-direct-dom-sweep-v0.1",
+      adapter: CAPTURE_ADAPTERS.gemini,
       scrollComplete,
       scrollSteps,
       scrollTop: Math.round(finalScrollTop),
@@ -560,6 +663,75 @@
     return [];
   }
 
+  function extractGeminiTurnsDirect(options = {}) {
+    const candidates = [
+      ...Array.from(document.querySelectorAll("user-query"))
+        .map((node) => ({
+          role: "human",
+          node: preferredGeminiUserNode(node),
+          container: geminiTurnContainer(node)
+        })),
+      ...Array.from(document.querySelectorAll("model-response"))
+        .map((node) => ({
+          role: "assistant",
+          node: preferredGeminiAssistantNode(node),
+          container: geminiTurnContainer(node)
+        }))
+    ];
+
+    const turns = uniqueCandidates(candidates)
+      .filter(({ node, container }) => node && container)
+      .filter(({ container }) => !options.visibleOnly || isInCaptureWindow(container))
+      .filter(({ node, container }) => !isGeminiAppChrome(container) && !isGeminiAppChrome(node))
+      .filter(({ node }) => !isGeminiComposerChrome(node))
+      .sort((a, b) => documentPosition(a.container, b.container))
+      .map(({ role, node, container }, index) => {
+        const text = markdownFromNode(node);
+        if (!isUsefulTurn(text)) return null;
+        const absoluteTop = absoluteTopForNode(container);
+        return {
+          role,
+          text,
+          _turnNumber: Number.POSITIVE_INFINITY,
+          _absoluteTop: absoluteTop,
+          _messageId: node.getAttribute("data-message-id") || container.getAttribute?.("data-message-id") || "",
+          _turnId: container.getAttribute?.("data-test-id") || container.getAttribute?.("data-testid") || "",
+          _captureKey: geminiCaptureKey(role, node, container, text, index, absoluteTop)
+        };
+      })
+      .filter(Boolean);
+
+    return collapseAdjacentSameRole(turns);
+  }
+
+  function preferredGeminiUserNode(node) {
+    return node.querySelector(".query-text") ||
+      node.querySelector("user-query-content") ||
+      node.querySelector("[data-test-id*='query' i]") ||
+      node;
+  }
+
+  function preferredGeminiAssistantNode(node) {
+    return node.querySelector("message-content") ||
+      node.querySelector(".markdown") ||
+      node.querySelector(".model-response-text") ||
+      node.querySelector("[class*='markdown' i]") ||
+      node;
+  }
+
+  function geminiTurnContainer(node) {
+    return node.closest("user-query, model-response, article, main li, main section") || node;
+  }
+
+  function geminiCaptureKey(role, node, container, text, index, absoluteTop) {
+    const id = node.getAttribute("data-message-id") ||
+      container.getAttribute?.("data-message-id") ||
+      container.getAttribute?.("id") ||
+      "";
+    if (id) return `gemini:${id}:${role}:${cleanText(text).slice(0, 120)}`;
+    return `gemini:${role}:${Math.round(absoluteTop / 20)}:${index}:${cleanText(text).slice(0, 200)}`;
+  }
+
   function claudeRoleNodes(selector, role) {
     return Array.from(document.querySelectorAll(selector))
       .filter((node) => node instanceof HTMLElement)
@@ -735,10 +907,28 @@
     return `${candidates.length}/${usable.length}/${usable.filter((turn) => turn.role === "human").length}/${usable.filter((turn) => turn.role === "assistant").length}`;
   }
 
+  function geminiDomDiagnostics() {
+    const direct = extractGeminiTurnsDirect();
+    return [
+      `user=${document.querySelectorAll("user-query").length}`,
+      `assistant=${document.querySelectorAll("model-response").length}`,
+      `direct=${direct.length}`,
+      `human=${direct.filter((turn) => turn.role === "human").length}`,
+      `ai=${direct.filter((turn) => turn.role === "assistant").length}`,
+      `mainText=${cleanText((document.querySelector("main, [role='main']") || document.body).innerText || "").length}`
+    ].join(", ");
+  }
+
   function safeClaudeTurns(turns, options = {}) {
     const ordered = (options.preserveCaptureOrder ? turns.slice().sort(compareCaptureOrder) : sortCapturedTurns(turns))
       .filter((turn) => isUsefulTurn(turn.text));
     return trimClaudeChromeBoundaries(collapseAdjacentSameRole(ordered));
+  }
+
+  function safeGeminiTurns(turns, options = {}) {
+    const ordered = (options.preserveCaptureOrder ? turns.slice().sort(compareCaptureOrder) : sortCapturedTurns(turns))
+      .filter((turn) => isUsefulTurn(turn.text));
+    return trimGeminiChromeBoundaries(collapseAdjacentSameRole(ordered));
   }
 
   function compareCaptureOrder(a, b) {
@@ -762,6 +952,21 @@
     return /Search⌘K|Chats\]\(\/recents\)|Projects\]\(\/projects\)|Artifacts\]\(\/artifacts|Recent chats|Free plan/i.test(value);
   }
 
+  function trimGeminiChromeBoundaries(turns) {
+    let start = 0;
+    let end = turns.length;
+    while (start < end && looksLikeGeminiBoundaryChrome(turns[start]?.text)) start += 1;
+    while (end > start && looksLikeGeminiBoundaryChrome(turns[end - 1]?.text)) end -= 1;
+    return turns.slice(start, end);
+  }
+
+  function looksLikeGeminiBoundaryChrome(text) {
+    const value = cleanText(text || "");
+    if (!value) return true;
+    if (value.length <= 100 && /^(Gemini|Gemini Apps|Recent chats|Settings|Help|Activity|New chat|Upgrade)\b/i.test(value)) return true;
+    return /Gemini Apps|Recent chats|Settings|Help|Activity|Google apps|Privacy|Terms/i.test(value);
+  }
+
   function isClaudeAppChrome(node) {
     return Boolean(node?.closest?.([
       "nav",
@@ -777,6 +982,38 @@
       "[class*='Sidebar']",
       "[class*='navigation']",
       "[class*='Navigation']"
+    ].join(",")));
+  }
+
+  function isGeminiAppChrome(node) {
+    return Boolean(node?.closest?.([
+      "nav",
+      "aside",
+      "header",
+      "[role='navigation']",
+      "[aria-label*='navigation' i]",
+      "[aria-label*='menu' i]",
+      "[aria-label*='sidebar' i]",
+      "[data-test-id*='side' i]",
+      "[data-testid*='side' i]",
+      "[class*='sidenav' i]",
+      "[class*='side-nav' i]",
+      "[class*='conversation-list' i]",
+      "[class*='history' i]"
+    ].join(",")));
+  }
+
+  function isGeminiComposerChrome(node) {
+    return Boolean(node?.closest?.([
+      "form",
+      "textarea",
+      "[contenteditable='true']",
+      "[role='textbox']",
+      "[aria-label*='Enter a prompt' i]",
+      "[aria-label*='prompt' i]",
+      "[aria-label*='Message' i]",
+      "[class*='composer' i]",
+      "[class*='input' i]"
     ].join(",")));
   }
 
@@ -805,6 +1042,20 @@
     const firstTurn = cleanText(turns[0]?.text || "");
     if (looksLikeClaudeBoundaryChrome(firstTurn)) return true;
     return false;
+  }
+
+  function isSuspiciousGeminiCapture(turns) {
+    const firstText = turns.slice(0, 8).map((turn) => turn.text).join("\n");
+    if (looksLikeAppChromeText(firstText)) return true;
+    const firstTurn = cleanText(turns[0]?.text || "");
+    if (looksLikeGeminiBoundaryChrome(firstTurn)) return true;
+    return false;
+  }
+
+  function assertGeminiHasContent(turns) {
+    if (!turns.length || turns.every((turn) => looksLikeGeminiBoundaryChrome(turn.text))) {
+      throw new Error(`Gemini capture could not find conversation text. ${geminiDomDiagnostics()} Scroll the conversation into view, wait for Gemini to finish rendering, then try again.`);
+    }
   }
 
   function turnFromRoleNode(node, index, options) {
@@ -981,8 +1232,8 @@
   }
 
   function looksLikeAppChromeText(text) {
-    return /^(Claude|ChatGPT|New chat|Projects|Recents|Upgrade|Settings|Try again)$/i.test(text) ||
-      /New chat|Search⌘K|Chats\]\(\/recents\)|Projects\]\(\/projects\)|Artifacts\]\(\/artifacts|Customize\]\(\/customize\)|CodeUpgrade|Free plan|Recent chats/i.test(text);
+    return /^(Claude|ChatGPT|Gemini|New chat|Projects|Recents|Upgrade|Settings|Try again)$/i.test(text) ||
+      /New chat|Search⌘K|Chats\]\(\/recents\)|Projects\]\(\/projects\)|Artifacts\]\(\/artifacts|Customize\]\(\/customize\)|CodeUpgrade|Free plan|Recent chats|Gemini Apps|Google apps/i.test(text);
   }
 
   function inferRoleFromArticle(article, index) {
@@ -1390,7 +1641,7 @@
       .replace(/\b(?:Viewed a file|Created \d+ files?|Created a file|Ran a command|Read a file|Searched the web)(?:,\s*(?:viewed a file|created \d+ files?|created a file|ran a command|read a file))*\b/gi, "")
       .replace(/,\s*(?:viewed a file|created \d+ files?|created a file|ran a command|read a file)/gi, "")
       .replace(/^[^\n]{1,120}Document\s+·\s+(?:MD|Code|HTML|Text)\s*$/gim, "")
-      .replace(/^你说\s*/gm, "")
+      .replace(/^(你说|Gemini 说)\s*/gm, "")
       .replace(/Show more\s*Show less/g, "")
       .replace(/\bShow more\b/g, "")
       .replace(/\bShow less\b/g, "")
@@ -1405,6 +1656,10 @@
       const claudeMatch = text.match(/\bClaude(?:\s+(?:Opus|Sonnet|Haiku))?(?:\s+\d(?:\.\d)?)?\b/i);
       return claudeMatch?.[0];
     }
+    if (platform === "gemini") {
+      const geminiMatch = text.match(/\bGemini\s+(?:\d+(?:\.\d+)?\s*)?(?:Pro|Flash|Advanced)?\b/i);
+      return geminiMatch?.[0]?.trim() || "Gemini";
+    }
     const match = text.match(/\bGPT-?5(?:\.\d+)?\b|\bGPT-?4(?:\.\d+|o)?\b|\bo[134]\b/i);
     return match?.[0];
   }
@@ -1415,7 +1670,7 @@
     const assistantTurns = turns.filter((turn) => turn.role === "assistant").length;
     const codeBlocks = (text.match(/```/g) || []).length / 2;
     const unbalancedCodeFence = (text.match(/```/g) || []).length % 2 !== 0;
-    const possibleVirtualization = (options.platform === "chatgpt" || options.platform === "claude") &&
+    const possibleVirtualization = (options.platform === "chatgpt" || options.platform === "claude" || options.platform === "gemini") &&
       turns.length <= 8 &&
       document.body.innerText.length > 5000;
     const roleImbalance = Math.abs(humanTurns - assistantTurns);
@@ -1428,12 +1683,18 @@
     if (options.platform === "claude" && isSuspiciousClaudeCapture(turns)) {
       warnings.push("Claude capture may include app navigation or may have missed one side of the conversation. Review the preview before saving.");
     }
+    if (options.platform === "gemini" && isSuspiciousGeminiCapture(turns)) {
+      warnings.push("Gemini capture may include app navigation or may have missed one side of the conversation. Review the preview before saving.");
+    }
     if (unbalancedCodeFence) warnings.push("Captured markdown has an unbalanced code fence.");
     if (options.platform === "chatgpt" && options.scrollComplete === false) {
       warnings.push(`ChatGPT DOM sweep stopped before reaching the page bottom (${options.scrollSteps || 0} steps, ${Math.round(options.scrollTop || 0)}/${Math.round(options.scrollHeight || 0)}px). Capture again after letting the page finish scrolling.`);
     }
     if (options.platform === "claude" && options.scrollComplete === false) {
       warnings.push(`Claude DOM sweep stopped before reaching the page bottom (${options.scrollSteps || 0} steps, ${Math.round(options.scrollTop || 0)}/${Math.round(options.scrollHeight || 0)}px). Capture again after letting the page finish scrolling.`);
+    }
+    if (options.platform === "gemini" && options.scrollComplete === false) {
+      warnings.push(`Gemini DOM sweep stopped before reaching the page bottom (${options.scrollSteps || 0} steps, ${Math.round(options.scrollTop || 0)}/${Math.round(options.scrollHeight || 0)}px). Capture again after letting the page finish scrolling.`);
     }
     if (possibleVirtualization) warnings.push(`Only the currently rendered ${platformLabel(options.platform)} messages may have been captured. Scroll the conversation, wait for older messages to load, and capture again.`);
     if (sameRoleAdjacency) warnings.push(`Detected ${sameRoleAdjacency} adjacent same-role turn pairs. Review for missed or mismatched turns.`);
@@ -1468,6 +1729,7 @@
 
   function platformLabel(platform) {
     if (platform === "claude") return "Claude";
+    if (platform === "gemini") return "Gemini";
     if (platform === "chatgpt") return "ChatGPT";
     return "AI";
   }
