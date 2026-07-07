@@ -952,7 +952,9 @@
       "[class*='markdown' i]",
       "article",
       "section",
-      "li"
+      "li",
+      "p",
+      "div"
     ].join(",")))
       .filter((node) => node instanceof HTMLElement)
       .filter((node) => !isGrokAppChrome(node))
@@ -964,8 +966,14 @@
     for (const node of blocks) {
       const text = markdownFromNode(node);
       if (!isUsefulTurn(text)) continue;
-      const role = inferGrokRole(node, candidates.length);
       const absoluteTop = absoluteTopForNode(node);
+      const duplicate = candidates.some((candidate) => {
+        const topDiff = Math.abs(candidate._absoluteTop - absoluteTop);
+        if (topDiff > 20) return false;
+        return candidate.text === text || candidate.text.includes(text) || text.includes(candidate.text);
+      });
+      if (duplicate) continue;
+      const role = inferGrokRole(node, candidates.length);
       candidates.push({
         role,
         text,
@@ -983,13 +991,14 @@
   function isGrokLeafTextBlock(node) {
     const text = cleanText(node.innerText || node.textContent || "");
     if (!isUsefulTurn(text)) return false;
+    if (text.length > 12000) return false;
     if (looksLikeGrokBoundaryChrome(text) || looksLikeAppChromeText(text)) return false;
     const childTextBlocks = Array.from(node.children || [])
       .filter((child) => child instanceof HTMLElement)
       .filter((child) => {
         if (isGrokComposerChrome(child) || isGrokAppChrome(child)) return false;
         const childText = cleanText(child.innerText || child.textContent || "");
-        return childText.length >= Math.min(80, text.length * 0.7);
+        return childText.length >= Math.min(120, Math.max(8, text.length * 0.8));
       });
     return childTextBlocks.length === 0;
   }
@@ -1205,13 +1214,28 @@
   function grokDomDiagnostics() {
     const direct = extractGrokTurnsDirect();
     const main = document.querySelector("main, [role='main']") || document.body;
+    const textBlocks = grokTextBlockDiagnostics();
     return [
       `roleNodes=${document.querySelectorAll("[data-testid*='message' i], [class*='message' i], [class*='response' i], article").length}`,
+      `textBlocks=${textBlocks.blocks}`,
+      `textUseful=${textBlocks.useful}`,
       `direct=${direct.length}`,
       `human=${direct.filter((turn) => turn.role === "human").length}`,
       `ai=${direct.filter((turn) => turn.role === "assistant").length}`,
       `mainText=${cleanText(main.innerText || main.textContent || "").length}`
     ].join(", ");
+  }
+
+  function grokTextBlockDiagnostics() {
+    const main = document.querySelector("main, [role='main']") || document.body;
+    const blocks = Array.from(main.querySelectorAll("article, section, li, p, div"))
+      .filter((node) => node instanceof HTMLElement)
+      .filter((node) => !isGrokAppChrome(node))
+      .filter((node) => !isGrokComposerChrome(node));
+    return {
+      blocks: blocks.length,
+      useful: blocks.filter((node) => isGrokLeafTextBlock(node)).length
+    };
   }
 
   function safeClaudeTurns(turns, options = {}) {
