@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "LTF Builder",
-  "description": "Export ChatGPT, Claude, and Gemini conversations as LocalThink Format (.ltf.md) files.",
+  "description": "Export ChatGPT, Claude, Gemini, and Grok conversations as LocalThink Format (.ltf.md) files.",
   "version": "0.2.0",
   "action": {
     "default_popup": "popup.html",

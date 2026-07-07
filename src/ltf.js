@@ -40,9 +40,11 @@ export function titleFromDocumentTitle(title) {
     .replace(/\s*[-|]\s*ChatGPT\s*$/i, "")
     .replace(/\s*[-|]\s*Claude\s*$/i, "")
     .replace(/\s*[-|]\s*Gemini\s*$/i, "")
+    .replace(/\s*[-|]\s*Grok\s*$/i, "")
     .replace(/^ChatGPT\s*[-|]\s*/i, "")
     .replace(/^Claude\s*[-|]\s*/i, "")
     .replace(/^Gemini\s*[-|]\s*/i, "")
+    .replace(/^Grok\s*[-|]\s*/i, "")
     .trim() || "AI Conversation";
 }
 

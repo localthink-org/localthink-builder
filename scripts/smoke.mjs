@@ -166,6 +166,53 @@ if (titleFromDocumentTitle("Gemini Research Notes - Gemini") !== "Gemini Researc
   throw new Error("Smoke test failed. Gemini title cleanup mismatch.");
 }
 
+const grokDoc = buildLtfDocument(
+  {
+    title: "Grok Research Notes",
+    platform: "grok",
+    language: "en",
+    captureAdapter: "browser-extension-grok-v0.1",
+    captureQuality: {
+      turnCount: 2,
+      humanTurns: 1,
+      assistantTurns: 1,
+      codeBlocks: 0,
+      captureStrategy: "grok-direct-dom-sweep-v0.1",
+      sameRoleAdjacency: 0,
+      roleImbalance: 0,
+      turnMin: 1,
+      turnMax: 2,
+      missingTurnCount: 0,
+      messageIdCount: 0,
+      turnIdCount: 0,
+      scrollComplete: true,
+      scrollSteps: 5
+    }
+  },
+  [
+    { role: "human", text: "Summarize this Grok thread." },
+    { role: "assistant", text: "Here are the key points." }
+  ]
+);
+
+for (const fragment of [
+  "platform: grok",
+  'x_capture_adapter: "browser-extension-grok-v0.1"',
+  'x_capture_strategy: "grok-direct-dom-sweep-v0.1"',
+  "x_capture_scroll_steps: 5",
+  "    platform: grok",
+  "**Human:** Summarize this Grok thread.",
+  "**AI:** Here are the key points."
+]) {
+  if (!grokDoc.includes(fragment)) {
+    throw new Error(`Smoke test failed. Missing Grok fragment: ${fragment}`);
+  }
+}
+
+if (titleFromDocumentTitle("Grok Research Notes - Grok") !== "Grok Research Notes") {
+  throw new Error("Smoke test failed. Grok title cleanup mismatch.");
+}
+
 const jaDoc = buildLtfDocument(
   {
     title: "ローカルAI",

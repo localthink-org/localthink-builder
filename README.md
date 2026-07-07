@@ -1,17 +1,18 @@
 # LTF Builder
 
-Chrome extension for exporting ChatGPT, Claude, and Gemini conversations as LocalThink Format (`.ltf.md`) files.
+Chrome extension for exporting ChatGPT, Claude, Gemini, and Grok conversations as LocalThink Format (`.ltf.md`) files.
 
 [Install from the Chrome Web Store](https://chromewebstore.google.com/detail/ltf-builder/icpjoemgdpkmllkngcpndocnalodhfaj)
 
 This version is intentionally conservative:
 
-- supports ChatGPT and Claude web pages, with experimental Gemini support
+- supports ChatGPT and Claude web pages, with experimental Gemini and Grok support
 - runs capture only after the user clicks the extension's Capture button
 - reads conversation text from the current supported conversation page DOM
 - uses a targeted turn sweep for long virtualized ChatGPT conversations
 - uses a direct DOM sweep with full-DOM completion for Claude conversations
 - uses an experimental direct DOM sweep for Gemini conversations
+- uses an experimental direct DOM sweep for Grok conversations
 - converts captured turns into `.ltf.md`
 - lets the user edit metadata before export
 - downloads the generated file locally
@@ -27,7 +28,7 @@ https://chromewebstore.google.com/detail/ltf-builder/icpjoemgdpkmllkngcpndocnalo
 
 After installation:
 
-1. Open a ChatGPT, Claude, or Gemini conversation.
+1. Open a ChatGPT, Claude, Gemini, or Grok conversation.
 2. Click LTF Builder.
 3. Click **Capture**.
 4. Edit metadata if needed.
@@ -48,7 +49,7 @@ After installation:
 localthink-builder
 ```
 
-7. Open a ChatGPT, Claude, or Gemini conversation.
+7. Open a ChatGPT, Claude, Gemini, or Grok conversation.
 8. Click LTF Builder.
 9. Click **Capture**.
 10. Edit metadata if needed.
@@ -80,7 +81,7 @@ Popup UI
   ↓ user clicks Capture
 chrome.scripting.executeScript
   ↓ inject content script into the active supported conversation tab
-ChatGPT targeted DOM capture, Claude direct DOM sweep, or Gemini direct DOM sweep
+ChatGPT targeted DOM capture, Claude direct DOM sweep, Gemini direct DOM sweep, or Grok direct DOM sweep
   ↓ deterministic serializer
 LTF markdown preview
   ↓ browser download
@@ -112,6 +113,7 @@ Conversation content is processed locally in the browser only after the user cli
 
 LTF Builder is not affiliated with OpenAI, ChatGPT, Anthropic, or Claude.
 LTF Builder is not affiliated with Google or Gemini.
+LTF Builder is not affiliated with xAI, X, Twitter, or Grok.
 
 ---
 
@@ -124,10 +126,11 @@ LTF Builder is not affiliated with Google or Gemini.
 
 ## Current Limitations
 
-- ChatGPT and Claude web conversations are supported; Gemini support is experimental.
+- ChatGPT and Claude web conversations are supported; Gemini and Grok support are experimental.
 - Capture is DOM-based and optimized for ChatGPT's virtualized conversation UI, but ChatGPT DOM changes can still require adapter updates.
 - Claude support is experimental and has been manually tested with long Claude Project conversations, but Claude DOM changes can still require adapter updates.
 - Gemini support is experimental and needs real-page testing against short and long Gemini conversations.
+- Grok support is experimental and needs real-page testing against short and long Grok conversations.
 - Attachments, images, generated files, and some tool outputs may be captured only as visible text.
 - Conversation creation time is not always available in the DOM, so `created` defaults to the current export date unless the user edits it.
 
