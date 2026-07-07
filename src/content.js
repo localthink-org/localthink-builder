@@ -957,8 +957,6 @@
       "div"
     ].join(",")))
       .filter((node) => node instanceof HTMLElement)
-      .filter((node) => !isGrokAppChrome(node))
-      .filter((node) => !isGrokComposerChrome(node))
       .filter((node) => !options.visibleOnly || isInCaptureWindow(node))
       .filter((node) => isGrokLeafTextBlock(node));
 
@@ -996,7 +994,6 @@
     const childTextBlocks = Array.from(node.children || [])
       .filter((child) => child instanceof HTMLElement)
       .filter((child) => {
-        if (isGrokComposerChrome(child) || isGrokAppChrome(child)) return false;
         const childText = cleanText(child.innerText || child.textContent || "");
         return childText.length >= Math.min(120, Math.max(8, text.length * 0.8));
       });
@@ -1229,9 +1226,7 @@
   function grokTextBlockDiagnostics() {
     const main = document.querySelector("main, [role='main']") || document.body;
     const blocks = Array.from(main.querySelectorAll("article, section, li, p, div"))
-      .filter((node) => node instanceof HTMLElement)
-      .filter((node) => !isGrokAppChrome(node))
-      .filter((node) => !isGrokComposerChrome(node));
+      .filter((node) => node instanceof HTMLElement);
     return {
       blocks: blocks.length,
       useful: blocks.filter((node) => isGrokLeafTextBlock(node)).length
