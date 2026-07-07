@@ -682,11 +682,10 @@
     const turns = uniqueCandidates(candidates)
       .filter(({ node, container }) => node && container)
       .filter(({ container }) => !options.visibleOnly || isInCaptureWindow(container))
-      .filter(({ node, container }) => !isGeminiAppChrome(container) && !isGeminiAppChrome(node))
-      .filter(({ node }) => !isGeminiComposerChrome(node))
+      .filter(({ node, container }) => !isGeminiComposerChrome(node) && !isGeminiComposerChrome(container))
       .sort((a, b) => documentPosition(a.container, b.container))
       .map(({ role, node, container }, index) => {
-        const text = markdownFromNode(node);
+        const text = geminiMarkdownFromNode(node, container);
         if (!isUsefulTurn(text)) return null;
         const absoluteTop = absoluteTopForNode(container);
         return {
@@ -702,6 +701,19 @@
       .filter(Boolean);
 
     return collapseAdjacentSameRole(turns);
+  }
+
+  function geminiMarkdownFromNode(node, container) {
+    const candidates = [node, container].filter(Boolean);
+    for (const candidate of candidates) {
+      const markdown = markdownFromNode(candidate);
+      if (isUsefulTurn(markdown)) return markdown;
+    }
+    for (const candidate of candidates) {
+      const text = cleanMarkdown(candidate.innerText || candidate.textContent || "");
+      if (isUsefulTurn(text)) return text;
+    }
+    return "";
   }
 
   function preferredGeminiUserNode(node) {
@@ -909,9 +921,15 @@
 
   function geminiDomDiagnostics() {
     const direct = extractGeminiTurnsDirect();
+    const userNodes = Array.from(document.querySelectorAll("user-query"));
+    const assistantNodes = Array.from(document.querySelectorAll("model-response"));
+    const userText = userNodes.filter((node) => cleanText(node.innerText || node.textContent || "").length > 0).length;
+    const assistantText = assistantNodes.filter((node) => cleanText(node.innerText || node.textContent || "").length > 0).length;
     return [
-      `user=${document.querySelectorAll("user-query").length}`,
-      `assistant=${document.querySelectorAll("model-response").length}`,
+      `user=${userNodes.length}`,
+      `assistant=${assistantNodes.length}`,
+      `userText=${userText}`,
+      `assistantText=${assistantText}`,
       `direct=${direct.length}`,
       `human=${direct.filter((turn) => turn.role === "human").length}`,
       `ai=${direct.filter((turn) => turn.role === "assistant").length}`,
