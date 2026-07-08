@@ -2024,13 +2024,13 @@
 
     if (!humanTurns || !assistantTurns) warnings.push("Could not clearly identify both human and AI turns.");
     if (options.platform === "claude" && isSuspiciousClaudeCapture(turns)) {
-      warnings.push("Claude capture may include app navigation or may have missed one side of the conversation. Review the preview before saving.");
+      warnings.push("Claude capture may include app navigation or may have missed one side of the conversation. Review the downloaded file before using it.");
     }
     if (options.platform === "gemini" && isSuspiciousGeminiCapture(turns)) {
-      warnings.push("Gemini capture may include app navigation or may have missed one side of the conversation. Review the preview before saving.");
+      warnings.push("Gemini capture may include app navigation or may have missed one side of the conversation. Review the downloaded file before using it.");
     }
     if (options.platform === "grok" && isSuspiciousGrokCapture(turns)) {
-      warnings.push("Grok capture may include app navigation or may have missed one side of the conversation. Review the preview before saving.");
+      warnings.push("Grok capture may include app navigation or may have missed one side of the conversation. Review the downloaded file before using it.");
     }
     if (unbalancedCodeFence) warnings.push("Captured markdown has an unbalanced code fence.");
     if (options.platform === "chatgpt" && options.scrollComplete === false) {
@@ -2047,10 +2047,10 @@
     }
     if (possibleVirtualization) warnings.push(`Only the currently rendered ${platformLabel(options.platform)} messages may have been captured. Scroll the conversation, wait for older messages to load, and capture again.`);
     if (sameRoleAdjacency) warnings.push(`Detected ${sameRoleAdjacency} adjacent same-role turn pairs. Review for missed or mismatched turns.`);
-    if (roleImbalance > 1) warnings.push(`Human/AI turn count is imbalanced by ${roleImbalance}. Review the preview before saving.`);
+    if (roleImbalance > 1) warnings.push(`Human/AI turn count is imbalanced by ${roleImbalance}. Review the downloaded file before using it.`);
     if (turnSequence.missingCount) warnings.push(`Detected ${turnSequence.missingCount} missing ${platformLabel(options.platform)} turn numbers within the captured range.`);
-    if (turns.length > 200) warnings.push("A very high number of turns was captured. Review the preview for app navigation or history entries.");
-    if (looksLikeAppChromeText(text)) warnings.push("Possible app navigation or sidebar text was captured. Review the preview before saving.");
+    if (turns.length > 200) warnings.push("A very high number of turns was captured. Review the downloaded file for app navigation or history entries.");
+    if (looksLikeAppChromeText(text)) warnings.push("Possible app navigation or sidebar text was captured. Review the downloaded file before using it.");
 
     return {
       turnCount: turns.length,

@@ -6,15 +6,15 @@ Chrome extension for exporting ChatGPT, Claude, Gemini, and Grok conversations a
 
 This version is intentionally conservative:
 
-- supports ChatGPT and Claude web pages, with experimental Gemini and Grok support
+- supports ChatGPT, Claude, Gemini, and Grok web conversations
 - runs capture only after the user clicks the extension's Capture button
 - reads conversation text from the current supported conversation page DOM
 - uses a targeted turn sweep for long virtualized ChatGPT conversations
 - uses a direct DOM sweep with full-DOM completion for Claude conversations
-- uses an experimental direct DOM sweep for Gemini conversations
-- uses an experimental direct DOM sweep for Grok conversations
+- uses a direct DOM sweep for Gemini conversations
+- uses exact Grok message nodes with a direct DOM sweep for Grok conversations
 - converts captured turns into `.ltf.md`
-- lets the user edit metadata before export
+- lets the user edit title, created time, and language before export
 - downloads the generated file locally
 - does not collect, transmit, sync, or remotely store conversation data
 
@@ -83,7 +83,7 @@ chrome.scripting.executeScript
   ↓ inject content script into the active supported conversation tab
 ChatGPT targeted DOM capture, Claude direct DOM sweep, Gemini direct DOM sweep, or Grok direct DOM sweep
   ↓ deterministic serializer
-LTF markdown preview
+local LTF document generated in the popup
   ↓ browser download
 .ltf.md file
 ```
@@ -121,16 +121,17 @@ LTF Builder is not affiliated with xAI, X, Twitter, or Grok.
 
 - ChatGPT long conversation export has been manually tested with a 322-turn conversation.
 - Claude long conversation export has been manually tested with a 528-turn Claude Project conversation, 575 scroll steps, and an approximately 994 KB `.ltf.md` file.
+- Gemini conversation export has been manually tested with multiple real Gemini conversations.
+- Grok conversation export has been manually tested with multiple real Grok conversations, including 62-turn, 102-turn, and 104-turn `.ltf.md` exports.
 
 ---
 
 ## Current Limitations
 
-- ChatGPT and Claude web conversations are supported; Gemini and Grok support are experimental.
+- ChatGPT, Claude, Gemini, and Grok web conversations are supported.
 - Capture is DOM-based and optimized for ChatGPT's virtualized conversation UI, but ChatGPT DOM changes can still require adapter updates.
-- Claude support is experimental and has been manually tested with long Claude Project conversations, but Claude DOM changes can still require adapter updates.
-- Gemini support is experimental and needs real-page testing against short and long Gemini conversations.
-- Grok support is experimental and needs real-page testing against short and long Grok conversations.
+- Claude support has been manually tested with long Claude Project conversations, but Claude DOM changes can still require adapter updates.
+- Gemini and Grok support are DOM-based and may require adapter updates if those platforms change their page structure.
 - Attachments, images, generated files, and some tool outputs may be captured only as visible text.
 - Conversation creation time is not always available in the DOM, so `created` defaults to the current export date unless the user edits it.
 

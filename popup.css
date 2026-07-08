@@ -18,10 +18,11 @@
 
 body {
   width: 420px;
-  min-height: 620px;
+  min-height: 0;
   margin: 0;
   background: var(--bg);
   color: var(--text);
+  overflow: hidden;
 }
 
 .shell {
@@ -51,6 +52,16 @@ p {
   color: var(--muted);
   font-size: 13px;
   line-height: 1.4;
+}
+
+a {
+  color: var(--accent);
+  font-weight: 650;
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
 }
 
 .pill {
@@ -137,16 +148,14 @@ label {
   gap: 5px;
 }
 
-label span,
-.previewLabel {
+label span {
   color: var(--muted);
   font-size: 12px;
   font-weight: 700;
 }
 
 input,
-select,
-textarea {
+select {
   width: 100%;
   border: 1px solid var(--border);
   border-radius: 7px;
@@ -160,16 +169,6 @@ input,
 select {
   height: 34px;
   padding: 0 9px;
-}
-
-textarea {
-  min-height: 170px;
-  max-height: 260px;
-  resize: vertical;
-  padding: 10px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", monospace;
-  font-size: 11px;
-  line-height: 1.45;
 }
 
 .summary {

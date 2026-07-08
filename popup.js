@@ -1,7 +1,6 @@
 import {
   buildLtfDocument,
   detectLanguage,
-  slugify,
   suggestFilename,
   titleFromDocumentTitle
 } from "./src/ltf.js";
@@ -19,18 +18,12 @@ const elements = {
   statusPill: document.querySelector("#statusPill"),
   titleInput: document.querySelector("#titleInput"),
   createdInput: document.querySelector("#createdInput"),
-  updatedInput: document.querySelector("#updatedInput"),
-  projectInput: document.querySelector("#projectInput"),
-  projectIdInput: document.querySelector("#projectIdInput"),
   languageInput: document.querySelector("#languageInput"),
-  visibilityInput: document.querySelector("#visibilityInput"),
-  tagsInput: document.querySelector("#tagsInput"),
   turnCount: document.querySelector("#turnCount"),
   platformName: document.querySelector("#platformName"),
   qualityPanel: document.querySelector("#qualityPanel"),
   qualityStatus: document.querySelector("#qualityStatus"),
   qualityList: document.querySelector("#qualityList"),
-  previewOutput: document.querySelector("#previewOutput"),
   message: document.querySelector("#message")
 };
 
@@ -40,22 +33,10 @@ elements.downloadButton.addEventListener("click", downloadLtf);
 for (const input of [
   elements.titleInput,
   elements.createdInput,
-  elements.updatedInput,
-  elements.projectInput,
-  elements.projectIdInput,
-  elements.languageInput,
-  elements.visibilityInput,
-  elements.tagsInput
+  elements.languageInput
 ]) {
-  input.addEventListener("input", renderPreview);
+  input.addEventListener("input", renderLtf);
 }
-
-elements.projectInput.addEventListener("input", () => {
-  if (!elements.projectIdInput.value.trim()) {
-    elements.projectIdInput.value = slugify(elements.projectInput.value);
-  }
-  renderPreview();
-});
 
 initializeDefaults();
 
@@ -72,7 +53,7 @@ async function captureConversation() {
 
     state.capture = response.data;
     populateFromCapture(response.data);
-    renderPreview();
+    renderLtf();
     setStatus(response.data.quality?.warnings?.length ? "Review" : "Captured", response.data.quality?.warnings?.length ? "warn" : "ok");
     setMessage(`Captured ${response.data.turns.length} turns from ${response.data.platform}.`);
   } catch (error) {
@@ -113,18 +94,17 @@ function isSupportedConversationUrl(tabUrl) {
 function initializeDefaults() {
   const now = new Date();
   elements.createdInput.value = now.toISOString();
-  elements.updatedInput.value = now.toISOString();
   elements.languageInput.value = "en";
-  elements.visibilityInput.value = "private";
+  elements.platformName.textContent = "No capture";
+  renderQuality(null);
 }
 
 function populateFromCapture(capture) {
   const allText = capture.turns.map((turn) => turn.text).join("\n");
   elements.titleInput.value = titleFromDocumentTitle(capture.title);
   elements.createdInput.value = capture.capturedAt || new Date().toISOString();
-  elements.updatedInput.value = new Date().toISOString();
   elements.languageInput.value = detectLanguage(allText);
-  elements.platformName.textContent = capture.platform || "chatgpt";
+  elements.platformName.textContent = displayPlatform(capture.platform);
   elements.turnCount.textContent = String(capture.turns.length);
   renderQuality(capture.quality);
 }
@@ -134,19 +114,27 @@ function metadataFromForm() {
   return {
     title: elements.titleInput.value.trim() || defaultTitleForPlatform(platform),
     created: elements.createdInput.value.trim(),
-    updated: elements.updatedInput.value.trim(),
+    updated: new Date().toISOString(),
     platform,
     model: state.capture?.model || "",
     language: elements.languageInput.value.trim() || "en",
-    project: elements.projectInput.value.trim(),
-    projectId: elements.projectIdInput.value.trim(),
+    project: "",
+    projectId: "",
     kind: "conversation",
     status: "active",
-    visibility: elements.visibilityInput.value,
-    tags: elements.tagsInput.value.trim(),
+    visibility: "private",
+    tags: "",
     captureAdapter: state.capture?.captureAdapter || "",
     captureQuality: state.capture?.quality
   };
+}
+
+function displayPlatform(platform) {
+  if (platform === "chatgpt") return "ChatGPT";
+  if (platform === "claude") return "Claude";
+  if (platform === "gemini") return "Gemini";
+  if (platform === "grok") return "Grok";
+  return "No capture";
 }
 
 function defaultTitleForPlatform(platform) {
@@ -159,7 +147,18 @@ function defaultTitleForPlatform(platform) {
 
 function renderQuality(quality) {
   if (!quality) {
-    elements.qualityPanel.hidden = true;
+    elements.qualityPanel.hidden = false;
+    elements.qualityStatus.textContent = "No capture";
+    elements.qualityStatus.className = "";
+    elements.qualityList.innerHTML = "";
+    for (const item of [
+      "Capture a supported AI conversation to see export details.",
+      "Supports ChatGPT, Claude, Gemini, and Grok."
+    ]) {
+      const li = document.createElement("li");
+      li.textContent = item;
+      elements.qualityList.append(li);
+    }
     return;
   }
 
@@ -201,11 +200,10 @@ function renderQuality(quality) {
   }
 }
 
-function renderPreview() {
+function renderLtf() {
   if (!state.capture) return;
 
   state.ltf = buildLtfDocument(metadataFromForm(), state.capture.turns);
-  elements.previewOutput.value = state.ltf;
   elements.downloadButton.disabled = false;
 }
 
