@@ -1,5 +1,5 @@
 (function () {
-  const CONTENT_VERSION = "2026-07-07-grok-support-v0.1";
+  const CONTENT_VERSION = "2026-07-08-grok-message-nodes-v0.4";
   if (globalThis.__localthinkContentVersion === CONTENT_VERSION) return;
   globalThis.__localthinkContentVersion = CONTENT_VERSION;
   globalThis.__localthinkContentInstalled = true;
@@ -561,6 +561,7 @@
     const allDirectTurns = extractGrokTurnsDirect();
     const sourceTurns = allDirectTurns.length > turns.length ? allDirectTurns : turns;
     const safeTurns = safeGrokTurns(sourceTurns, { preserveCaptureOrder: sourceTurns === turns });
+    if (safeTurns.length) assertGrokHasContent(safeTurns);
     return {
       turns: hasBothRoles(safeTurns) ? safeTurns.map(markSequentialTurnMetadata) : [],
       strategy: "grok-direct-dom-sweep-v0.1",
@@ -851,33 +852,15 @@
 
   function extractGrokTurnsDirect(options = {}) {
     const roleCandidates = [
-      ...grokRoleNodes("[data-testid*='user-message' i]", "human"),
-      ...grokRoleNodes("[data-testid*='human-message' i]", "human"),
-      ...grokRoleNodes("[data-testid*='query' i]", "human"),
-      ...grokRoleNodes("[class*='user-message' i]", "human"),
-      ...grokRoleNodes("[class*='human-message' i]", "human"),
-      ...grokRoleNodes("[data-testid*='assistant' i]", "assistant"),
-      ...grokRoleNodes("[data-testid*='grok' i]", "assistant"),
-      ...grokRoleNodes("[data-testid*='bot' i]", "assistant"),
-      ...grokRoleNodes("[class*='assistant-message' i]", "assistant"),
-      ...grokRoleNodes("[class*='grok' i]", "assistant"),
-      ...grokRoleNodes("[class*='response' i]", "assistant")
+      ...grokRoleNodes("[data-testid='user-message']", "human"),
+      ...grokRoleNodes("[data-testid='assistant-message']", "assistant")
     ];
 
-    const direct = dedupeTurnCandidates(roleCandidates)
+    return dedupeTurnCandidates(roleCandidates)
       .filter((candidate) => !options.visibleOnly || isInCaptureWindow(candidate.container))
-      .filter((candidate) => !isGrokAppChrome(candidate.container) && !isGrokAppChrome(candidate.node))
-      .filter((candidate) => !isGrokComposerChrome(candidate.node) && !isGrokComposerChrome(candidate.container))
       .map((candidate, index) => grokTurnFromCandidate(candidate, index))
       .filter(Boolean)
       .sort(compareCapturedTurns);
-
-    const directSafe = collapseAdjacentSameRole(direct);
-    if (hasBothRoles(directSafe)) return directSafe;
-
-    const inferred = extractGrokTurnsFromMainText(options);
-    if (hasBothRoles(inferred)) return inferred;
-    return directSafe;
   }
 
   function grokRoleNodes(selector, role) {
@@ -891,16 +874,7 @@
   }
 
   function grokTurnContainer(node) {
-    return node.closest([
-      "[data-testid*='message' i]",
-      "[data-testid*='conversation' i]",
-      "[class*='message' i]",
-      "[class*='conversation' i]",
-      "[class*='response' i]",
-      "article",
-      "main li",
-      "main section"
-    ].join(",")) || node;
+    return node.closest("[id^='response-']") || node;
   }
 
   function grokTurnFromCandidate(candidate, index) {
@@ -919,7 +893,7 @@
   }
 
   function grokMarkdownFromNode(node, container) {
-    const candidates = [node, container].filter(Boolean);
+    const candidates = [node, ...grokScopedCodeBlockContainers(node), container].filter(Boolean);
     for (const candidate of candidates) {
       const markdown = markdownFromNode(candidate);
       if (isUsefulTurn(markdown)) return markdown;
@@ -931,6 +905,14 @@
     return "";
   }
 
+  function grokScopedCodeBlockContainers(node) {
+    if (node.getAttribute?.("data-testid") !== "assistant-message") return [];
+    const container = grokTurnContainer(node);
+    if (!container || container === node) return [];
+    return Array.from(container.querySelectorAll("[data-testid='code-block']"))
+      .filter((codeBlock) => codeBlock instanceof HTMLElement);
+  }
+
   function grokCaptureKey(role, node, container, text, index, absoluteTop) {
     const id = node.getAttribute("data-message-id") ||
       container.getAttribute?.("data-message-id") ||
@@ -938,52 +920,6 @@
       "";
     if (id) return `grok:${id}:${role}:${cleanText(text).slice(0, 120)}`;
     return `grok:${role}:${Math.round(absoluteTop / 20)}:${index}:${cleanText(text).slice(0, 200)}`;
-  }
-
-  function extractGrokTurnsFromMainText(options = {}) {
-    const main = document.querySelector("main, [role='main']") || document.body;
-    const blocks = Array.from(main.querySelectorAll([
-      "[data-testid*='message' i]",
-      "[data-testid*='conversation' i]",
-      "[class*='message' i]",
-      "[class*='conversation' i]",
-      "[class*='response' i]",
-      "[class*='prose' i]",
-      "[class*='markdown' i]",
-      "article",
-      "section",
-      "li",
-      "p",
-      "div"
-    ].join(",")))
-      .filter((node) => node instanceof HTMLElement)
-      .filter((node) => !options.visibleOnly || isInCaptureWindow(node))
-      .filter((node) => isGrokLeafTextBlock(node));
-
-    const candidates = [];
-    for (const node of blocks) {
-      const text = markdownFromNode(node);
-      if (!isUsefulTurn(text)) continue;
-      const absoluteTop = absoluteTopForNode(node);
-      const duplicate = candidates.some((candidate) => {
-        const topDiff = Math.abs(candidate._absoluteTop - absoluteTop);
-        if (topDiff > 20) return false;
-        return candidate.text === text || candidate.text.includes(text) || text.includes(candidate.text);
-      });
-      if (duplicate) continue;
-      const role = inferGrokRole(node, candidates.length);
-      candidates.push({
-        role,
-        text,
-        _turnNumber: Number.POSITIVE_INFINITY,
-        _absoluteTop: absoluteTop,
-        _messageId: node.getAttribute("data-message-id") || "",
-        _turnId: node.getAttribute("data-testid") || "",
-        _captureKey: `grok-main:${role}:${Math.round(absoluteTop / 20)}:${candidates.length}:${cleanText(text).slice(0, 200)}`
-      });
-    }
-
-    return collapseAdjacentSameRole(candidates.sort(compareCapturedTurns));
   }
 
   function isGrokLeafTextBlock(node) {
@@ -998,21 +934,6 @@
         return childText.length >= Math.min(120, Math.max(8, text.length * 0.8));
       });
     return childTextBlocks.length === 0;
-  }
-
-  function inferGrokRole(node, index) {
-    const value = [
-      node.getAttribute("aria-label") || "",
-      node.getAttribute("data-testid") || "",
-      node.getAttribute("data-message-author-role") || "",
-      node.className || "",
-      node.closest("[data-testid], [aria-label], [class]")?.getAttribute?.("data-testid") || "",
-      node.closest("[data-testid], [aria-label], [class]")?.getAttribute?.("aria-label") || "",
-      node.closest("[data-testid], [aria-label], [class]")?.className || ""
-    ].join(" ");
-    if (/assistant|grok|bot|response|answer/i.test(value)) return "assistant";
-    if (/user|human|you|query|prompt/i.test(value)) return "human";
-    return index % 2 === 0 ? "human" : "assistant";
   }
 
   function claudeRoleNodes(selector, role) {
@@ -1210,15 +1131,22 @@
 
   function grokDomDiagnostics() {
     const direct = extractGrokTurnsDirect();
+    const safe = safeGrokTurns(direct);
     const main = document.querySelector("main, [role='main']") || document.body;
     const textBlocks = grokTextBlockDiagnostics();
     return [
+      `grokUser=${document.querySelectorAll("[data-testid='user-message']").length}`,
+      `grokAssistant=${document.querySelectorAll("[data-testid='assistant-message']").length}`,
+      `grokCode=${document.querySelectorAll("[data-testid='code-block']").length}`,
       `roleNodes=${document.querySelectorAll("[data-testid*='message' i], [class*='message' i], [class*='response' i], article").length}`,
       `textBlocks=${textBlocks.blocks}`,
       `textUseful=${textBlocks.useful}`,
       `direct=${direct.length}`,
       `human=${direct.filter((turn) => turn.role === "human").length}`,
       `ai=${direct.filter((turn) => turn.role === "assistant").length}`,
+      `safe=${safe.length}`,
+      `safeHuman=${safe.filter((turn) => turn.role === "human").length}`,
+      `safeAi=${safe.filter((turn) => turn.role === "assistant").length}`,
       `mainText=${cleanText(main.innerText || main.textContent || "").length}`
     ].join(", ");
   }
@@ -1248,7 +1176,24 @@
   function safeGrokTurns(turns, options = {}) {
     const ordered = (options.preserveCaptureOrder ? turns.slice().sort(compareCaptureOrder) : sortCapturedTurns(turns))
       .filter((turn) => isUsefulTurn(turn.text));
-    return trimGrokChromeBoundaries(collapseAdjacentSameRole(ordered));
+    const deduped = dedupeGrokRepeatedTurns(ordered);
+    const collapsed = collapseAdjacentSameRole(deduped);
+    return trimGrokChromeBoundaries(collapsed);
+  }
+
+  function dedupeGrokRepeatedTurns(turns) {
+    const seen = new Set();
+    const result = [];
+    for (const turn of turns) {
+      const keyText = cleanText(turn.text || "");
+      if (!keyText) continue;
+      const key = turn._captureKey ||
+        `${turn.role}:${Math.round((turn._absoluteTop ?? 0) / 20)}:${keyText.length}:${keyText.slice(0, 180)}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      result.push(turn);
+    }
+    return result;
   }
 
   function compareCaptureOrder(a, b) {
@@ -1423,7 +1368,18 @@
     if (looksLikeAppChromeText(firstText)) return true;
     const firstTurn = cleanText(turns[0]?.text || "");
     if (looksLikeGrokBoundaryChrome(firstTurn)) return true;
+    if (isFragmentedGrokCapture(turns)) return true;
     return false;
+  }
+
+  function isFragmentedGrokCapture(turns) {
+    if (turns.length < 80) return false;
+    const lengths = turns
+      .map((turn) => cleanText(turn.text || "").length)
+      .sort((a, b) => a - b);
+    const median = lengths[Math.floor(lengths.length / 2)] || 0;
+    const shortTurns = lengths.filter((length) => length <= 90).length;
+    return median <= 90 && shortTurns / turns.length > 0.65;
   }
 
   function assertGeminiHasContent(turns) {
@@ -1435,6 +1391,9 @@
   function assertGrokHasContent(turns) {
     if (!turns.length || turns.every((turn) => looksLikeGrokBoundaryChrome(turn.text))) {
       throw new Error(`Grok capture could not find conversation text. ${grokDomDiagnostics()} Scroll the conversation into view, wait for Grok to finish rendering, then try again.`);
+    }
+    if (isFragmentedGrokCapture(turns)) {
+      throw new Error(`Grok capture found text, but it looks fragmented into page text blocks instead of conversation turns. ${grokDomDiagnostics()} Scroll the conversation into view and try again; if this repeats, Grok's DOM layout needs a platform-specific adapter update.`);
     }
   }
 
