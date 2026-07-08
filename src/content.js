@@ -1,5 +1,5 @@
 (function () {
-  const CONTENT_VERSION = "2026-07-01-claude-support-v0.2";
+  const CONTENT_VERSION = "2026-07-08-grok-message-nodes-v0.4";
   if (globalThis.__localthinkContentVersion === CONTENT_VERSION) return;
   globalThis.__localthinkContentVersion = CONTENT_VERSION;
   globalThis.__localthinkContentInstalled = true;
@@ -7,7 +7,9 @@
   const CAPTURE_MESSAGE = "LOCALTHINK_CAPTURE_V6";
   const CAPTURE_ADAPTERS = {
     chatgpt: "browser-extension-chatgpt-v2.2",
-    claude: "browser-extension-claude-v2.1"
+    claude: "browser-extension-claude-v2.1",
+    gemini: "browser-extension-gemini-v0.1",
+    grok: "browser-extension-grok-v0.1"
   };
 
   chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
@@ -32,7 +34,7 @@
   async function captureConversation(message = {}) {
     const platform = detectPlatform();
     if (!CAPTURE_ADAPTERS[platform]) {
-      throw new Error("Open a supported ChatGPT or Claude conversation page before capturing.");
+      throw new Error("Open a supported ChatGPT, Claude, Gemini, or Grok conversation page before capturing.");
     }
     const result = await extractTurnsForPlatform(platform, message);
     const turns = Array.isArray(result) ? result : result.turns;
@@ -67,12 +69,17 @@
   function detectPlatform() {
     if (/(^|\.)chatgpt\.com$/i.test(location.hostname) || /^chat\.openai\.com$/i.test(location.hostname)) return "chatgpt";
     if (/^claude\.ai$/i.test(location.hostname)) return "claude";
+    if (/^gemini\.google\.com$/i.test(location.hostname)) return "gemini";
+    if (/(^|\.)grok\.com$/i.test(location.hostname)) return "grok";
+    if (/^(x|twitter)\.com$/i.test(location.hostname) && /^\/(?:i\/)?grok(?:\/|$)/i.test(location.pathname)) return "grok";
     return "unsupported";
   }
 
   async function extractTurnsForPlatform(platform, message = {}) {
     if (platform === "chatgpt") return extractChatGptTurnsDeep();
     if (platform === "claude") return extractClaudeTurnsDeep();
+    if (platform === "gemini") return extractGeminiTurnsDeep();
+    if (platform === "grok") return extractGrokTurnsDeep();
     return { turns: [], strategy: "unsupported" };
   }
 
@@ -173,7 +180,12 @@
       "[data-testid*='assistant' i]",
       ".font-claude-message",
       ".font-claude-response",
-      "[class*='assistant-message']"
+      "[class*='assistant-message']",
+      "user-query",
+      "model-response",
+      "[data-testid*='message' i]",
+      "[class*='message' i]",
+      "[class*='response' i]"
     ].join(","));
     const candidates = [
       document.scrollingElement,
@@ -357,6 +369,203 @@
       turns: hasBothRoles(safeTurns) ? safeTurns.map(markSequentialTurnMetadata) : [],
       strategy: "claude-direct-dom-sweep-v2.1",
       adapter: CAPTURE_ADAPTERS.claude,
+      scrollComplete,
+      scrollSteps,
+      scrollTop: Math.round(finalScrollTop),
+      scrollHeight: Math.round(finalScrollHeight)
+    };
+  }
+
+  async function extractGeminiTurnsDeep() {
+    const scroller = findConversationScroller();
+    const initialTop = getScrollTop(scroller);
+
+    if (canScroll(scroller)) {
+      const directSweep = await sweepGeminiDirectTurns(scroller, initialTop);
+      if (directSweep.turns.length) return directSweep;
+    }
+
+    const directTurns = extractGeminiTurnsDirect();
+    if (directTurns.length) {
+      const safeTurns = safeGeminiTurns(directTurns);
+      assertGeminiHasContent(safeTurns);
+      return {
+        turns: safeTurns.map(markSequentialTurnMetadata),
+        strategy: "gemini-direct-dom-v0.1",
+        adapter: CAPTURE_ADAPTERS.gemini,
+        scrollComplete: true,
+        scrollSteps: 0,
+        scrollTop: Math.round(window.scrollY || document.documentElement.scrollTop || document.body.scrollTop || 0),
+        scrollHeight: Math.round(Math.max(document.documentElement.scrollHeight, document.body.scrollHeight))
+      };
+    }
+
+    throw new Error(`Gemini capture could not find conversation text. ${geminiDomDiagnostics()} Scroll the conversation into view, wait for Gemini to finish rendering, then try again.`);
+  }
+
+  async function sweepGeminiDirectTurns(scroller, initialTop) {
+    const seen = new Set();
+    const turns = [];
+    const addVisibleTurns = () => {
+      for (const turn of extractGeminiTurnsDirect({ visibleOnly: true })) {
+        const key = turnKey(turn);
+        if (key && !seen.has(key)) {
+          seen.add(key);
+          turns.push({
+            ...turn,
+            _captureOrder: turns.length
+          });
+        }
+      }
+    };
+
+    setScrollTop(scroller, 0);
+    await waitForRender(260);
+    addVisibleTurns();
+
+    let previousTop = -1;
+    let stableReads = 0;
+    let scrollComplete = false;
+    let scrollSteps = 0;
+    let finalScrollTop = getScrollTop(scroller);
+    let finalScrollHeight = getScrollHeight(scroller);
+    const hardMaxSteps = maxScrollSweepSteps(scroller);
+
+    for (let step = 0; step < hardMaxSteps; step += 1) {
+      const currentTop = getScrollTop(scroller);
+      const nextTop = Math.min(currentTop + scrollSweepStepSize(scroller), getScrollHeight(scroller));
+      setScrollTop(scroller, nextTop);
+      await waitForRender(220);
+      addVisibleTurns();
+
+      const actualTop = getScrollTop(scroller);
+      const atBottom = isAtBottom(scroller);
+      finalScrollTop = actualTop;
+      finalScrollHeight = getScrollHeight(scroller);
+      scrollSteps = step + 1;
+
+      if (atBottom) {
+        stableReads += 1;
+        if (stableReads >= 3) {
+          scrollComplete = true;
+          break;
+        }
+      } else if (Math.abs(actualTop - previousTop) < 2) {
+        stableReads += 1;
+        if (stableReads >= 8) break;
+      } else {
+        stableReads = 0;
+      }
+      previousTop = actualTop;
+    }
+
+    setScrollTop(scroller, initialTop);
+    const allDirectTurns = extractGeminiTurnsDirect();
+    const sourceTurns = allDirectTurns.length > turns.length ? allDirectTurns : turns;
+    const safeTurns = safeGeminiTurns(sourceTurns, { preserveCaptureOrder: sourceTurns === turns });
+    return {
+      turns: hasBothRoles(safeTurns) ? safeTurns.map(markSequentialTurnMetadata) : [],
+      strategy: "gemini-direct-dom-sweep-v0.1",
+      adapter: CAPTURE_ADAPTERS.gemini,
+      scrollComplete,
+      scrollSteps,
+      scrollTop: Math.round(finalScrollTop),
+      scrollHeight: Math.round(finalScrollHeight)
+    };
+  }
+
+  async function extractGrokTurnsDeep() {
+    const scroller = findConversationScroller();
+    const initialTop = getScrollTop(scroller);
+
+    if (canScroll(scroller)) {
+      const directSweep = await sweepGrokDirectTurns(scroller, initialTop);
+      if (directSweep.turns.length) return directSweep;
+    }
+
+    const directTurns = extractGrokTurnsDirect();
+    if (directTurns.length) {
+      const safeTurns = safeGrokTurns(directTurns);
+      assertGrokHasContent(safeTurns);
+      return {
+        turns: safeTurns.map(markSequentialTurnMetadata),
+        strategy: "grok-direct-dom-v0.1",
+        adapter: CAPTURE_ADAPTERS.grok,
+        scrollComplete: true,
+        scrollSteps: 0,
+        scrollTop: Math.round(window.scrollY || document.documentElement.scrollTop || document.body.scrollTop || 0),
+        scrollHeight: Math.round(Math.max(document.documentElement.scrollHeight, document.body.scrollHeight))
+      };
+    }
+
+    throw new Error(`Grok capture could not find conversation text. ${grokDomDiagnostics()} Scroll the conversation into view, wait for Grok to finish rendering, then try again.`);
+  }
+
+  async function sweepGrokDirectTurns(scroller, initialTop) {
+    const seen = new Set();
+    const turns = [];
+    const addVisibleTurns = () => {
+      for (const turn of extractGrokTurnsDirect({ visibleOnly: true })) {
+        const key = turnKey(turn);
+        if (key && !seen.has(key)) {
+          seen.add(key);
+          turns.push({
+            ...turn,
+            _captureOrder: turns.length
+          });
+        }
+      }
+    };
+
+    setScrollTop(scroller, 0);
+    await waitForRender(260);
+    addVisibleTurns();
+
+    let previousTop = -1;
+    let stableReads = 0;
+    let scrollComplete = false;
+    let scrollSteps = 0;
+    let finalScrollTop = getScrollTop(scroller);
+    let finalScrollHeight = getScrollHeight(scroller);
+    const hardMaxSteps = maxScrollSweepSteps(scroller);
+
+    for (let step = 0; step < hardMaxSteps; step += 1) {
+      const currentTop = getScrollTop(scroller);
+      const nextTop = Math.min(currentTop + scrollSweepStepSize(scroller), getScrollHeight(scroller));
+      setScrollTop(scroller, nextTop);
+      await waitForRender(220);
+      addVisibleTurns();
+
+      const actualTop = getScrollTop(scroller);
+      const atBottom = isAtBottom(scroller);
+      finalScrollTop = actualTop;
+      finalScrollHeight = getScrollHeight(scroller);
+      scrollSteps = step + 1;
+
+      if (atBottom) {
+        stableReads += 1;
+        if (stableReads >= 3) {
+          scrollComplete = true;
+          break;
+        }
+      } else if (Math.abs(actualTop - previousTop) < 2) {
+        stableReads += 1;
+        if (stableReads >= 8) break;
+      } else {
+        stableReads = 0;
+      }
+      previousTop = actualTop;
+    }
+
+    setScrollTop(scroller, initialTop);
+    const allDirectTurns = extractGrokTurnsDirect();
+    const sourceTurns = allDirectTurns.length > turns.length ? allDirectTurns : turns;
+    const safeTurns = safeGrokTurns(sourceTurns, { preserveCaptureOrder: sourceTurns === turns });
+    if (safeTurns.length) assertGrokHasContent(safeTurns);
+    return {
+      turns: hasBothRoles(safeTurns) ? safeTurns.map(markSequentialTurnMetadata) : [],
+      strategy: "grok-direct-dom-sweep-v0.1",
+      adapter: CAPTURE_ADAPTERS.grok,
       scrollComplete,
       scrollSteps,
       scrollTop: Math.round(finalScrollTop),
@@ -560,6 +769,173 @@
     return [];
   }
 
+  function extractGeminiTurnsDirect(options = {}) {
+    const candidates = [
+      ...Array.from(document.querySelectorAll("user-query"))
+        .map((node) => ({
+          role: "human",
+          node: preferredGeminiUserNode(node),
+          container: geminiTurnContainer(node)
+        })),
+      ...Array.from(document.querySelectorAll("model-response"))
+        .map((node) => ({
+          role: "assistant",
+          node: preferredGeminiAssistantNode(node),
+          container: geminiTurnContainer(node)
+        }))
+    ];
+
+    const turns = uniqueCandidates(candidates)
+      .filter(({ node, container }) => node && container)
+      .filter(({ container }) => !options.visibleOnly || isInCaptureWindow(container))
+      .filter(({ node, container }) => !isGeminiComposerChrome(node) && !isGeminiComposerChrome(container))
+      .sort((a, b) => documentPosition(a.container, b.container))
+      .map(({ role, node, container }, index) => {
+        const text = geminiMarkdownFromNode(node, container);
+        if (!isUsefulTurn(text)) return null;
+        const absoluteTop = absoluteTopForNode(container);
+        return {
+          role,
+          text,
+          _turnNumber: Number.POSITIVE_INFINITY,
+          _absoluteTop: absoluteTop,
+          _messageId: node.getAttribute("data-message-id") || container.getAttribute?.("data-message-id") || "",
+          _turnId: container.getAttribute?.("data-test-id") || container.getAttribute?.("data-testid") || "",
+          _captureKey: geminiCaptureKey(role, node, container, text, index, absoluteTop)
+        };
+      })
+      .filter(Boolean);
+
+    return collapseAdjacentSameRole(turns);
+  }
+
+  function geminiMarkdownFromNode(node, container) {
+    const candidates = [node, container].filter(Boolean);
+    for (const candidate of candidates) {
+      const markdown = markdownFromNode(candidate);
+      if (isUsefulTurn(markdown)) return markdown;
+    }
+    for (const candidate of candidates) {
+      const text = cleanMarkdown(candidate.innerText || candidate.textContent || "");
+      if (isUsefulTurn(text)) return text;
+    }
+    return "";
+  }
+
+  function preferredGeminiUserNode(node) {
+    return node.querySelector(".query-text") ||
+      node.querySelector("user-query-content") ||
+      node.querySelector("[data-test-id*='query' i]") ||
+      node;
+  }
+
+  function preferredGeminiAssistantNode(node) {
+    return node.querySelector("message-content") ||
+      node.querySelector(".markdown") ||
+      node.querySelector(".model-response-text") ||
+      node.querySelector("[class*='markdown' i]") ||
+      node;
+  }
+
+  function geminiTurnContainer(node) {
+    return node.closest("user-query, model-response, article, main li, main section") || node;
+  }
+
+  function geminiCaptureKey(role, node, container, text, index, absoluteTop) {
+    const id = node.getAttribute("data-message-id") ||
+      container.getAttribute?.("data-message-id") ||
+      container.getAttribute?.("id") ||
+      "";
+    if (id) return `gemini:${id}:${role}:${cleanText(text).slice(0, 120)}`;
+    return `gemini:${role}:${Math.round(absoluteTop / 20)}:${index}:${cleanText(text).slice(0, 200)}`;
+  }
+
+  function extractGrokTurnsDirect(options = {}) {
+    const roleCandidates = [
+      ...grokRoleNodes("[data-testid='user-message']", "human"),
+      ...grokRoleNodes("[data-testid='assistant-message']", "assistant")
+    ];
+
+    return dedupeTurnCandidates(roleCandidates)
+      .filter((candidate) => !options.visibleOnly || isInCaptureWindow(candidate.container))
+      .map((candidate, index) => grokTurnFromCandidate(candidate, index))
+      .filter(Boolean)
+      .sort(compareCapturedTurns);
+  }
+
+  function grokRoleNodes(selector, role) {
+    return Array.from(document.querySelectorAll(selector))
+      .filter((node) => node instanceof HTMLElement)
+      .map((node) => ({
+        node,
+        role,
+        container: grokTurnContainer(node)
+      }));
+  }
+
+  function grokTurnContainer(node) {
+    return node.closest("[id^='response-']") || node;
+  }
+
+  function grokTurnFromCandidate(candidate, index) {
+    const text = grokMarkdownFromNode(candidate.node, candidate.container);
+    if (!isUsefulTurn(text)) return null;
+    const absoluteTop = absoluteTopForNode(candidate.container);
+    return {
+      role: candidate.role,
+      text,
+      _turnNumber: Number.POSITIVE_INFINITY,
+      _absoluteTop: absoluteTop,
+      _messageId: candidate.node.getAttribute("data-message-id") || candidate.container.getAttribute?.("data-message-id") || "",
+      _turnId: candidate.container.getAttribute?.("data-testid") || "",
+      _captureKey: grokCaptureKey(candidate.role, candidate.node, candidate.container, text, index, absoluteTop)
+    };
+  }
+
+  function grokMarkdownFromNode(node, container) {
+    const candidates = [node, ...grokScopedCodeBlockContainers(node), container].filter(Boolean);
+    for (const candidate of candidates) {
+      const markdown = markdownFromNode(candidate);
+      if (isUsefulTurn(markdown)) return markdown;
+    }
+    for (const candidate of candidates) {
+      const text = cleanMarkdown(candidate.innerText || candidate.textContent || "");
+      if (isUsefulTurn(text)) return text;
+    }
+    return "";
+  }
+
+  function grokScopedCodeBlockContainers(node) {
+    if (node.getAttribute?.("data-testid") !== "assistant-message") return [];
+    const container = grokTurnContainer(node);
+    if (!container || container === node) return [];
+    return Array.from(container.querySelectorAll("[data-testid='code-block']"))
+      .filter((codeBlock) => codeBlock instanceof HTMLElement);
+  }
+
+  function grokCaptureKey(role, node, container, text, index, absoluteTop) {
+    const id = node.getAttribute("data-message-id") ||
+      container.getAttribute?.("data-message-id") ||
+      container.getAttribute?.("id") ||
+      "";
+    if (id) return `grok:${id}:${role}:${cleanText(text).slice(0, 120)}`;
+    return `grok:${role}:${Math.round(absoluteTop / 20)}:${index}:${cleanText(text).slice(0, 200)}`;
+  }
+
+  function isGrokLeafTextBlock(node) {
+    const text = cleanText(node.innerText || node.textContent || "");
+    if (!isUsefulTurn(text)) return false;
+    if (text.length > 12000) return false;
+    if (looksLikeGrokBoundaryChrome(text) || looksLikeAppChromeText(text)) return false;
+    const childTextBlocks = Array.from(node.children || [])
+      .filter((child) => child instanceof HTMLElement)
+      .filter((child) => {
+        const childText = cleanText(child.innerText || child.textContent || "");
+        return childText.length >= Math.min(120, Math.max(8, text.length * 0.8));
+      });
+    return childTextBlocks.length === 0;
+  }
+
   function claudeRoleNodes(selector, role) {
     return Array.from(document.querySelectorAll(selector))
       .filter((node) => node instanceof HTMLElement)
@@ -735,10 +1111,89 @@
     return `${candidates.length}/${usable.length}/${usable.filter((turn) => turn.role === "human").length}/${usable.filter((turn) => turn.role === "assistant").length}`;
   }
 
+  function geminiDomDiagnostics() {
+    const direct = extractGeminiTurnsDirect();
+    const userNodes = Array.from(document.querySelectorAll("user-query"));
+    const assistantNodes = Array.from(document.querySelectorAll("model-response"));
+    const userText = userNodes.filter((node) => cleanText(node.innerText || node.textContent || "").length > 0).length;
+    const assistantText = assistantNodes.filter((node) => cleanText(node.innerText || node.textContent || "").length > 0).length;
+    return [
+      `user=${userNodes.length}`,
+      `assistant=${assistantNodes.length}`,
+      `userText=${userText}`,
+      `assistantText=${assistantText}`,
+      `direct=${direct.length}`,
+      `human=${direct.filter((turn) => turn.role === "human").length}`,
+      `ai=${direct.filter((turn) => turn.role === "assistant").length}`,
+      `mainText=${cleanText((document.querySelector("main, [role='main']") || document.body).innerText || "").length}`
+    ].join(", ");
+  }
+
+  function grokDomDiagnostics() {
+    const direct = extractGrokTurnsDirect();
+    const safe = safeGrokTurns(direct);
+    const main = document.querySelector("main, [role='main']") || document.body;
+    const textBlocks = grokTextBlockDiagnostics();
+    return [
+      `grokUser=${document.querySelectorAll("[data-testid='user-message']").length}`,
+      `grokAssistant=${document.querySelectorAll("[data-testid='assistant-message']").length}`,
+      `grokCode=${document.querySelectorAll("[data-testid='code-block']").length}`,
+      `roleNodes=${document.querySelectorAll("[data-testid*='message' i], [class*='message' i], [class*='response' i], article").length}`,
+      `textBlocks=${textBlocks.blocks}`,
+      `textUseful=${textBlocks.useful}`,
+      `direct=${direct.length}`,
+      `human=${direct.filter((turn) => turn.role === "human").length}`,
+      `ai=${direct.filter((turn) => turn.role === "assistant").length}`,
+      `safe=${safe.length}`,
+      `safeHuman=${safe.filter((turn) => turn.role === "human").length}`,
+      `safeAi=${safe.filter((turn) => turn.role === "assistant").length}`,
+      `mainText=${cleanText(main.innerText || main.textContent || "").length}`
+    ].join(", ");
+  }
+
+  function grokTextBlockDiagnostics() {
+    const main = document.querySelector("main, [role='main']") || document.body;
+    const blocks = Array.from(main.querySelectorAll("article, section, li, p, div"))
+      .filter((node) => node instanceof HTMLElement);
+    return {
+      blocks: blocks.length,
+      useful: blocks.filter((node) => isGrokLeafTextBlock(node)).length
+    };
+  }
+
   function safeClaudeTurns(turns, options = {}) {
     const ordered = (options.preserveCaptureOrder ? turns.slice().sort(compareCaptureOrder) : sortCapturedTurns(turns))
       .filter((turn) => isUsefulTurn(turn.text));
     return trimClaudeChromeBoundaries(collapseAdjacentSameRole(ordered));
+  }
+
+  function safeGeminiTurns(turns, options = {}) {
+    const ordered = (options.preserveCaptureOrder ? turns.slice().sort(compareCaptureOrder) : sortCapturedTurns(turns))
+      .filter((turn) => isUsefulTurn(turn.text));
+    return trimGeminiChromeBoundaries(collapseAdjacentSameRole(ordered));
+  }
+
+  function safeGrokTurns(turns, options = {}) {
+    const ordered = (options.preserveCaptureOrder ? turns.slice().sort(compareCaptureOrder) : sortCapturedTurns(turns))
+      .filter((turn) => isUsefulTurn(turn.text));
+    const deduped = dedupeGrokRepeatedTurns(ordered);
+    const collapsed = collapseAdjacentSameRole(deduped);
+    return trimGrokChromeBoundaries(collapsed);
+  }
+
+  function dedupeGrokRepeatedTurns(turns) {
+    const seen = new Set();
+    const result = [];
+    for (const turn of turns) {
+      const keyText = cleanText(turn.text || "");
+      if (!keyText) continue;
+      const key = turn._captureKey ||
+        `${turn.role}:${Math.round((turn._absoluteTop ?? 0) / 20)}:${keyText.length}:${keyText.slice(0, 180)}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      result.push(turn);
+    }
+    return result;
   }
 
   function compareCaptureOrder(a, b) {
@@ -762,6 +1217,36 @@
     return /Search⌘K|Chats\]\(\/recents\)|Projects\]\(\/projects\)|Artifacts\]\(\/artifacts|Recent chats|Free plan/i.test(value);
   }
 
+  function trimGeminiChromeBoundaries(turns) {
+    let start = 0;
+    let end = turns.length;
+    while (start < end && looksLikeGeminiBoundaryChrome(turns[start]?.text)) start += 1;
+    while (end > start && looksLikeGeminiBoundaryChrome(turns[end - 1]?.text)) end -= 1;
+    return turns.slice(start, end);
+  }
+
+  function looksLikeGeminiBoundaryChrome(text) {
+    const value = cleanText(text || "");
+    if (!value) return true;
+    if (value.length <= 100 && /^(Gemini|Gemini Apps|Recent chats|Settings|Help|Activity|New chat|Upgrade)\b/i.test(value)) return true;
+    return /Gemini Apps|Recent chats|Settings|Help|Activity|Google apps|Privacy|Terms/i.test(value);
+  }
+
+  function trimGrokChromeBoundaries(turns) {
+    let start = 0;
+    let end = turns.length;
+    while (start < end && looksLikeGrokBoundaryChrome(turns[start]?.text)) start += 1;
+    while (end > start && looksLikeGrokBoundaryChrome(turns[end - 1]?.text)) end -= 1;
+    return turns.slice(start, end);
+  }
+
+  function looksLikeGrokBoundaryChrome(text) {
+    const value = cleanText(text || "");
+    if (!value) return true;
+    if (value.length <= 100 && /^(Grok|Explore|Messages|Notifications|Premium|Search|Home|Profile|Settings|New chat|Upgrade)\b/i.test(value)) return true;
+    return /What do you want to know|Search Grok|New chat|Explore|Premium|Subscribe|Terms|Privacy|Grok can make mistakes/i.test(value);
+  }
+
   function isClaudeAppChrome(node) {
     return Boolean(node?.closest?.([
       "nav",
@@ -777,6 +1262,69 @@
       "[class*='Sidebar']",
       "[class*='navigation']",
       "[class*='Navigation']"
+    ].join(",")));
+  }
+
+  function isGeminiAppChrome(node) {
+    return Boolean(node?.closest?.([
+      "nav",
+      "aside",
+      "header",
+      "[role='navigation']",
+      "[aria-label*='navigation' i]",
+      "[aria-label*='menu' i]",
+      "[aria-label*='sidebar' i]",
+      "[data-test-id*='side' i]",
+      "[data-testid*='side' i]",
+      "[class*='sidenav' i]",
+      "[class*='side-nav' i]",
+      "[class*='conversation-list' i]",
+      "[class*='history' i]"
+    ].join(",")));
+  }
+
+  function isGeminiComposerChrome(node) {
+    return Boolean(node?.closest?.([
+      "form",
+      "textarea",
+      "[contenteditable='true']",
+      "[role='textbox']",
+      "[aria-label*='Enter a prompt' i]",
+      "[aria-label*='prompt' i]",
+      "[aria-label*='Message' i]",
+      "[class*='composer' i]",
+      "[class*='input' i]"
+    ].join(",")));
+  }
+
+  function isGrokAppChrome(node) {
+    return Boolean(node?.closest?.([
+      "nav",
+      "aside",
+      "header",
+      "[role='navigation']",
+      "[aria-label*='navigation' i]",
+      "[aria-label*='menu' i]",
+      "[aria-label*='sidebar' i]",
+      "[data-testid='sidebarColumn']",
+      "[data-testid='primaryColumn'] nav",
+      "[data-testid*='nav' i]",
+      "[class*='sidebar' i]",
+      "[class*='navigation' i]"
+    ].join(",")));
+  }
+
+  function isGrokComposerChrome(node) {
+    return Boolean(node?.closest?.([
+      "form",
+      "textarea",
+      "[contenteditable='true']",
+      "[role='textbox']",
+      "[aria-label*='Ask' i]",
+      "[aria-label*='Message' i]",
+      "[aria-label*='prompt' i]",
+      "[class*='composer' i]",
+      "[class*='input' i]"
     ].join(",")));
   }
 
@@ -805,6 +1353,48 @@
     const firstTurn = cleanText(turns[0]?.text || "");
     if (looksLikeClaudeBoundaryChrome(firstTurn)) return true;
     return false;
+  }
+
+  function isSuspiciousGeminiCapture(turns) {
+    const firstText = turns.slice(0, 8).map((turn) => turn.text).join("\n");
+    if (looksLikeAppChromeText(firstText)) return true;
+    const firstTurn = cleanText(turns[0]?.text || "");
+    if (looksLikeGeminiBoundaryChrome(firstTurn)) return true;
+    return false;
+  }
+
+  function isSuspiciousGrokCapture(turns) {
+    const firstText = turns.slice(0, 8).map((turn) => turn.text).join("\n");
+    if (looksLikeAppChromeText(firstText)) return true;
+    const firstTurn = cleanText(turns[0]?.text || "");
+    if (looksLikeGrokBoundaryChrome(firstTurn)) return true;
+    if (isFragmentedGrokCapture(turns)) return true;
+    return false;
+  }
+
+  function isFragmentedGrokCapture(turns) {
+    if (turns.length < 80) return false;
+    const lengths = turns
+      .map((turn) => cleanText(turn.text || "").length)
+      .sort((a, b) => a - b);
+    const median = lengths[Math.floor(lengths.length / 2)] || 0;
+    const shortTurns = lengths.filter((length) => length <= 90).length;
+    return median <= 90 && shortTurns / turns.length > 0.65;
+  }
+
+  function assertGeminiHasContent(turns) {
+    if (!turns.length || turns.every((turn) => looksLikeGeminiBoundaryChrome(turn.text))) {
+      throw new Error(`Gemini capture could not find conversation text. ${geminiDomDiagnostics()} Scroll the conversation into view, wait for Gemini to finish rendering, then try again.`);
+    }
+  }
+
+  function assertGrokHasContent(turns) {
+    if (!turns.length || turns.every((turn) => looksLikeGrokBoundaryChrome(turn.text))) {
+      throw new Error(`Grok capture could not find conversation text. ${grokDomDiagnostics()} Scroll the conversation into view, wait for Grok to finish rendering, then try again.`);
+    }
+    if (isFragmentedGrokCapture(turns)) {
+      throw new Error(`Grok capture found text, but it looks fragmented into page text blocks instead of conversation turns. ${grokDomDiagnostics()} Scroll the conversation into view and try again; if this repeats, Grok's DOM layout needs a platform-specific adapter update.`);
+    }
   }
 
   function turnFromRoleNode(node, index, options) {
@@ -981,8 +1571,8 @@
   }
 
   function looksLikeAppChromeText(text) {
-    return /^(Claude|ChatGPT|New chat|Projects|Recents|Upgrade|Settings|Try again)$/i.test(text) ||
-      /New chat|Search⌘K|Chats\]\(\/recents\)|Projects\]\(\/projects\)|Artifacts\]\(\/artifacts|Customize\]\(\/customize\)|CodeUpgrade|Free plan|Recent chats/i.test(text);
+    return /^(Claude|ChatGPT|Gemini|Grok|New chat|Projects|Recents|Upgrade|Settings|Try again)$/i.test(text) ||
+      /New chat|Search⌘K|Chats\]\(\/recents\)|Projects\]\(\/projects\)|Artifacts\]\(\/artifacts|Customize\]\(\/customize\)|CodeUpgrade|Free plan|Recent chats|Gemini Apps|Google apps|Search Grok|Grok can make mistakes/i.test(text);
   }
 
   function inferRoleFromArticle(article, index) {
@@ -1390,7 +1980,7 @@
       .replace(/\b(?:Viewed a file|Created \d+ files?|Created a file|Ran a command|Read a file|Searched the web)(?:,\s*(?:viewed a file|created \d+ files?|created a file|ran a command|read a file))*\b/gi, "")
       .replace(/,\s*(?:viewed a file|created \d+ files?|created a file|ran a command|read a file)/gi, "")
       .replace(/^[^\n]{1,120}Document\s+·\s+(?:MD|Code|HTML|Text)\s*$/gim, "")
-      .replace(/^你说\s*/gm, "")
+      .replace(/^(你说|Gemini 说)\s*/gm, "")
       .replace(/Show more\s*Show less/g, "")
       .replace(/\bShow more\b/g, "")
       .replace(/\bShow less\b/g, "")
@@ -1405,6 +1995,14 @@
       const claudeMatch = text.match(/\bClaude(?:\s+(?:Opus|Sonnet|Haiku))?(?:\s+\d(?:\.\d)?)?\b/i);
       return claudeMatch?.[0];
     }
+    if (platform === "gemini") {
+      const geminiMatch = text.match(/\bGemini\s+(?:\d+(?:\.\d+)?\s*)?(?:Pro|Flash|Advanced)?\b/i);
+      return geminiMatch?.[0]?.trim() || "Gemini";
+    }
+    if (platform === "grok") {
+      const grokMatch = text.match(/\bGrok\s+(?:\d+(?:\.\d+)?|Beta|Mini|Code|Think)?\b/i);
+      return grokMatch?.[0]?.trim() || "Grok";
+    }
     const match = text.match(/\bGPT-?5(?:\.\d+)?\b|\bGPT-?4(?:\.\d+|o)?\b|\bo[134]\b/i);
     return match?.[0];
   }
@@ -1415,7 +2013,7 @@
     const assistantTurns = turns.filter((turn) => turn.role === "assistant").length;
     const codeBlocks = (text.match(/```/g) || []).length / 2;
     const unbalancedCodeFence = (text.match(/```/g) || []).length % 2 !== 0;
-    const possibleVirtualization = (options.platform === "chatgpt" || options.platform === "claude") &&
+    const possibleVirtualization = (options.platform === "chatgpt" || options.platform === "claude" || options.platform === "gemini" || options.platform === "grok") &&
       turns.length <= 8 &&
       document.body.innerText.length > 5000;
     const roleImbalance = Math.abs(humanTurns - assistantTurns);
@@ -1428,12 +2026,24 @@
     if (options.platform === "claude" && isSuspiciousClaudeCapture(turns)) {
       warnings.push("Claude capture may include app navigation or may have missed one side of the conversation. Review the preview before saving.");
     }
+    if (options.platform === "gemini" && isSuspiciousGeminiCapture(turns)) {
+      warnings.push("Gemini capture may include app navigation or may have missed one side of the conversation. Review the preview before saving.");
+    }
+    if (options.platform === "grok" && isSuspiciousGrokCapture(turns)) {
+      warnings.push("Grok capture may include app navigation or may have missed one side of the conversation. Review the preview before saving.");
+    }
     if (unbalancedCodeFence) warnings.push("Captured markdown has an unbalanced code fence.");
     if (options.platform === "chatgpt" && options.scrollComplete === false) {
       warnings.push(`ChatGPT DOM sweep stopped before reaching the page bottom (${options.scrollSteps || 0} steps, ${Math.round(options.scrollTop || 0)}/${Math.round(options.scrollHeight || 0)}px). Capture again after letting the page finish scrolling.`);
     }
     if (options.platform === "claude" && options.scrollComplete === false) {
       warnings.push(`Claude DOM sweep stopped before reaching the page bottom (${options.scrollSteps || 0} steps, ${Math.round(options.scrollTop || 0)}/${Math.round(options.scrollHeight || 0)}px). Capture again after letting the page finish scrolling.`);
+    }
+    if (options.platform === "gemini" && options.scrollComplete === false) {
+      warnings.push(`Gemini DOM sweep stopped before reaching the page bottom (${options.scrollSteps || 0} steps, ${Math.round(options.scrollTop || 0)}/${Math.round(options.scrollHeight || 0)}px). Capture again after letting the page finish scrolling.`);
+    }
+    if (options.platform === "grok" && options.scrollComplete === false) {
+      warnings.push(`Grok DOM sweep stopped before reaching the page bottom (${options.scrollSteps || 0} steps, ${Math.round(options.scrollTop || 0)}/${Math.round(options.scrollHeight || 0)}px). Capture again after letting the page finish scrolling.`);
     }
     if (possibleVirtualization) warnings.push(`Only the currently rendered ${platformLabel(options.platform)} messages may have been captured. Scroll the conversation, wait for older messages to load, and capture again.`);
     if (sameRoleAdjacency) warnings.push(`Detected ${sameRoleAdjacency} adjacent same-role turn pairs. Review for missed or mismatched turns.`);
@@ -1468,6 +2078,8 @@
 
   function platformLabel(platform) {
     if (platform === "claude") return "Claude";
+    if (platform === "gemini") return "Gemini";
+    if (platform === "grok") return "Grok";
     if (platform === "chatgpt") return "ChatGPT";
     return "AI";
   }
@@ -1536,9 +2148,11 @@
       .replace(/\s*[-|]\s*ChatGPT\s*$/i, "")
       .replace(/\s*[-|]\s*Claude\s*$/i, "")
       .replace(/\s*[-|]\s*Google Gemini\s*$/i, "")
+      .replace(/\s*[-|]\s*Grok\s*$/i, "")
       .replace(/^ChatGPT\s*[-|]\s*/i, "")
       .replace(/^Claude\s*[-|]\s*/i, "")
       .replace(/^Google Gemini\s*[-|]\s*/i, "")
+      .replace(/^Grok\s*[-|]\s*/i, "")
       .trim() || "AI Conversation";
   }
 })();

@@ -30,6 +30,8 @@ export function detectLanguage(text) {
     }
     return "zh-TW";
   }
+  if (/[\u3040-\u30ff]/.test(value)) return "ja";
+  if (/[\uac00-\ud7af]/.test(value)) return "ko";
   return "en";
 }
 
@@ -37,8 +39,12 @@ export function titleFromDocumentTitle(title) {
   return normalizeScalar(title)
     .replace(/\s*[-|]\s*ChatGPT\s*$/i, "")
     .replace(/\s*[-|]\s*Claude\s*$/i, "")
+    .replace(/\s*[-|]\s*Gemini\s*$/i, "")
+    .replace(/\s*[-|]\s*Grok\s*$/i, "")
     .replace(/^ChatGPT\s*[-|]\s*/i, "")
     .replace(/^Claude\s*[-|]\s*/i, "")
+    .replace(/^Gemini\s*[-|]\s*/i, "")
+    .replace(/^Grok\s*[-|]\s*/i, "")
     .trim() || "AI Conversation";
 }
 
@@ -135,25 +141,88 @@ function formatTurnText(text) {
 }
 
 function buildSummary(metadata, turns) {
-  const count = turns.length;
   const title = normalizeScalar(metadata.title);
   const firstHuman = turns.find((turn) => turn.role === "human")?.text || "";
   const topic = firstMeaningfulTopic(firstHuman) || title;
-  const language = detectLanguage(turns.map((turn) => turn.text).join("\n"));
-  const displayTitle = title && title !== "ChatGPT Conversation" ? `「${title}」` : "這場對話";
+  const language = metadata.language || detectLanguage(turns.map((turn) => turn.text).join("\n"));
+
+  return buildLocalizedSummary({
+    title: title && title !== "ChatGPT Conversation" ? title : "",
+    language,
+    turnCount: turns.length,
+    topic,
+    source: "builder"
+  });
+}
+
+function buildLocalizedSummary(options) {
+  const language = normalizeLanguage(options.language);
+  const title = normalizeScalar(options.title);
+  const topic = normalizeScalar(options.topic).slice(0, 120);
+  const count = options.turnCount;
 
   if (language.startsWith("zh")) {
+    const displayTitle = title ? `「${title}」` : "這場對話";
+    const sourceText = options.source === "builder" ? "，完整內容由 LTF Builder 擷取並轉換為 LTF" : "";
     if (topic) {
-      return `這份 LTF 文件保存了${displayTitle}，共 ${count} 個回合。主題從「${topic.slice(0, 120)}」開始，完整內容由 LTF Builder 擷取並轉換為 LTF。`;
+      return `這份 LTF 文件保存了${displayTitle}，共 ${count} 個回合。主題從「${topic}」開始${sourceText}。`;
     }
-    return `這份 LTF 文件保存了${displayTitle}，共 ${count} 個回合，完整內容由 LTF Builder 擷取並轉換為 LTF。`;
+    return `這份 LTF 文件保存了${displayTitle}，共 ${count} 個回合${sourceText}。`;
   }
 
-  if (topic) {
-    const englishTitle = title && title !== "ChatGPT Conversation" ? `"${title}"` : "a browser-captured AI conversation";
-    return `This LTF document preserves ${englishTitle} with ${count} captured turns. The conversation starts from: ${topic.slice(0, 120)}.`;
+  if (language === "ja") {
+    const displayTitle = title ? `「${title}」` : "このAI対話";
+    return topic
+      ? `このLTFファイルは${displayTitle}を保存しています。全 ${count} ターン。会話は「${topic}」から始まります。`
+      : `このLTFファイルは${displayTitle}を保存しています。全 ${count} ターン。`;
   }
-  return `This LTF document preserves a browser-captured AI conversation with ${count} captured turns.`;
+
+  if (language === "ko") {
+    const displayTitle = title ? `「${title}」` : "이 AI 대화";
+    return topic
+      ? `이 LTF 파일은 ${displayTitle}를 저장합니다. 총 ${count}턴입니다. 대화는 「${topic}」에서 시작합니다.`
+      : `이 LTF 파일은 ${displayTitle}를 저장합니다. 총 ${count}턴입니다.`;
+  }
+
+  if (language === "fr") {
+    const displayTitle = title ? `« ${title} »` : "une conversation IA";
+    return topic
+      ? `Ce fichier LTF conserve ${displayTitle} avec ${count} tours. La conversation commence par : ${topic}.`
+      : `Ce fichier LTF conserve ${displayTitle} avec ${count} tours.`;
+  }
+
+  if (language === "de") {
+    const displayTitle = title ? `"${title}"` : "eine KI-Unterhaltung";
+    return topic
+      ? `Diese LTF-Datei bewahrt ${displayTitle} mit ${count} Runden auf. Die Unterhaltung beginnt mit: ${topic}.`
+      : `Diese LTF-Datei bewahrt ${displayTitle} mit ${count} Runden auf.`;
+  }
+
+  if (language === "es") {
+    const displayTitle = title ? `"${title}"` : "una conversación con IA";
+    return topic
+      ? `Este archivo LTF conserva ${displayTitle} con ${count} turnos. La conversación empieza con: ${topic}.`
+      : `Este archivo LTF conserva ${displayTitle} con ${count} turnos.`;
+  }
+
+  const displayTitle = title
+    ? `"${title}"`
+    : options.source === "builder" ? "a browser-captured AI conversation" : "an AI conversation";
+  const turnPhrase = options.source === "builder" ? `${count} captured turns` : `${count} turns`;
+  return topic
+    ? `This LTF document preserves ${displayTitle} with ${turnPhrase}. The conversation starts from: ${topic}.`
+    : `This LTF document preserves ${displayTitle} with ${turnPhrase}.`;
+}
+
+function normalizeLanguage(language) {
+  const value = String(language || "").toLowerCase();
+  if (value.startsWith("zh")) return "zh";
+  if (value.startsWith("ja")) return "ja";
+  if (value.startsWith("ko")) return "ko";
+  if (value.startsWith("fr")) return "fr";
+  if (value.startsWith("de")) return "de";
+  if (value.startsWith("es")) return "es";
+  return "en";
 }
 
 function firstMeaningfulTopic(text) {
