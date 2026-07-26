@@ -137,6 +137,12 @@ LTF Builder is not affiliated with xAI, X, Twitter, or Grok.
 
 ---
 
+## License
+
+LTF Builder is released under the [MIT License](LICENSE).
+
+---
+
 ## Links
 
 - Chrome Web Store: https://chromewebstore.google.com/detail/ltf-builder/icpjoemgdpkmllkngcpndocnalodhfaj
