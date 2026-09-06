@@ -16,6 +16,7 @@ const elements = {
   captureButton: document.querySelector("#captureButton"),
   downloadButton: document.querySelector("#downloadButton"),
   statusPill: document.querySelector("#statusPill"),
+  versionLabel: document.querySelector("#versionLabel"),
   titleInput: document.querySelector("#titleInput"),
   createdInput: document.querySelector("#createdInput"),
   languageInput: document.querySelector("#languageInput"),
@@ -92,6 +93,8 @@ function isSupportedConversationUrl(tabUrl) {
 }
 
 function initializeDefaults() {
+  const version = chrome.runtime.getManifest().version;
+  elements.versionLabel.textContent = `v${version}`;
   const now = new Date();
   elements.createdInput.value = now.toISOString();
   elements.languageInput.value = "en";

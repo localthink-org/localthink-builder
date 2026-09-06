@@ -1,6 +1,6 @@
 {
   "name": "localthink-builder",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "Chrome extension for exporting ChatGPT, Claude, Gemini, and Grok conversations as LocalThink Format files.",
   "type": "module",
   "license": "MIT",
