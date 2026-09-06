@@ -1,12 +1,12 @@
 (function () {
-  const CONTENT_VERSION = "2026-07-08-grok-message-nodes-v0.4";
+  const CONTENT_VERSION = "2026-09-06-chatgpt-long-page-sweep-v0.1";
   if (globalThis.__localthinkContentVersion === CONTENT_VERSION) return;
   globalThis.__localthinkContentVersion = CONTENT_VERSION;
   globalThis.__localthinkContentInstalled = true;
 
   const CAPTURE_MESSAGE = "LOCALTHINK_CAPTURE_V6";
   const CAPTURE_ADAPTERS = {
-    chatgpt: "browser-extension-chatgpt-v2.2",
+    chatgpt: "browser-extension-chatgpt-v2.3",
     claude: "browser-extension-claude-v2.1",
     gemini: "browser-extension-gemini-v0.1",
     grok: "browser-extension-grok-v0.1"
@@ -109,7 +109,20 @@
     await waitForRender();
     addVisibleTurns();
 
-    if (targetTurnNumbers.length >= 12) {
+    if (shouldUseChatGptLongPageSweep(scroller, targetTurnNumbers)) {
+      const sweep = await sweepChatGptLongPage(scroller, addVisibleTurns);
+      setScrollTop(scroller, initialTop);
+      return {
+        turns: sortCapturedTurns(turns).map(markDomTurnMetadata),
+        strategy: "chatgpt-long-page-scroll-sweep",
+        scrollComplete: sweep.scrollComplete,
+        scrollSteps: sweep.scrollSteps,
+        scrollTop: Math.round(sweep.scrollTop),
+        scrollHeight: Math.round(sweep.scrollHeight)
+      };
+    }
+
+    if (shouldUseKnownChatGptTurnSweep(targetTurnNumbers)) {
       await sweepKnownChatGptTurns(scroller, targetTurnNumbers, addVisibleTurns, turns);
       const capturedNumbers = capturedTurnNumbers(turns);
       const missingTargetCount = targetTurnNumbers.filter((number) => !capturedNumbers.has(number)).length;
@@ -640,6 +653,93 @@
   function maxScrollSweepSteps(node) {
     const estimated = Math.ceil(getScrollHeight(node) / scrollSweepStepSize(node)) + 80;
     return Math.min(Math.max(estimated, 240), 1400);
+  }
+
+  function shouldUseKnownChatGptTurnSweep(turnNumbers) {
+    if (turnNumbers.length < 12) return false;
+    const min = Math.min(...turnNumbers);
+    const max = Math.max(...turnNumbers);
+    const range = max - min + 1;
+    if (!Number.isFinite(range) || range <= 0) return false;
+    const missingCount = range - turnNumbers.length;
+    return missingCount <= Math.max(8, range * 0.18);
+  }
+
+  function shouldUseChatGptLongPageSweep(scroller, turnNumbers) {
+    const scrollHeight = getScrollHeight(scroller);
+    const clientHeight = Math.max(1, getClientHeight(scroller));
+    if (scrollHeight > clientHeight * 18) return true;
+    if (turnNumbers.length < 12) return false;
+    const min = Math.min(...turnNumbers);
+    const max = Math.max(...turnNumbers);
+    const range = max - min + 1;
+    return Number.isFinite(range) && range > turnNumbers.length * 2;
+  }
+
+  async function sweepChatGptLongPage(scroller, addVisibleTurns) {
+    const positions = chatGptLongPageSweepPositions(scroller);
+    let scrollSteps = 0;
+    let finalScrollTop = getScrollTop(scroller);
+    let finalScrollHeight = getScrollHeight(scroller);
+    let scrollComplete = false;
+
+    for (const position of positions) {
+      setScrollTop(scroller, position);
+      await waitForRender(120);
+      addVisibleTurns();
+      finalScrollTop = getScrollTop(scroller);
+      finalScrollHeight = getScrollHeight(scroller);
+      scrollSteps += 1;
+    }
+
+    setScrollTop(scroller, Math.max(0, getScrollHeight(scroller) - getClientHeight(scroller)));
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      await waitForRender(160);
+      addVisibleTurns();
+      finalScrollTop = getScrollTop(scroller);
+      finalScrollHeight = getScrollHeight(scroller);
+      scrollSteps += 1;
+      if (isAtBottom(scroller)) {
+        scrollComplete = true;
+        break;
+      }
+    }
+
+    return {
+      scrollComplete,
+      scrollSteps,
+      scrollTop: finalScrollTop,
+      scrollHeight: finalScrollHeight
+    };
+  }
+
+  function chatGptLongPageSweepPositions(scroller) {
+    const scrollHeight = getScrollHeight(scroller);
+    const clientHeight = Math.max(1, getClientHeight(scroller));
+    const maxTop = Math.max(0, scrollHeight - clientHeight);
+    if (!maxTop) return [0];
+
+    const stride = Math.max(clientHeight * 3.5, 2600);
+    const stepCount = Math.min(Math.max(Math.ceil(maxTop / stride), 48), 900);
+    const positions = [];
+
+    for (let index = 0; index <= stepCount; index += 1) {
+      positions.push(Math.round((maxTop * index) / stepCount));
+    }
+
+    return uniqueSortedNumbers([
+      0,
+      ...positions,
+      Math.max(0, Math.round(maxTop * 0.985)),
+      maxTop
+    ]);
+  }
+
+  function uniqueSortedNumbers(values) {
+    return Array.from(new Set(values
+      .map((value) => Math.round(Number(value) || 0))
+      .filter((value) => value >= 0)))
+      .sort((a, b) => a - b);
   }
 
   function waitForRender(delay = 180) {

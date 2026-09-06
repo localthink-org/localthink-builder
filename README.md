@@ -81,7 +81,7 @@ Popup UI
   ↓ user clicks Capture
 chrome.scripting.executeScript
   ↓ inject content script into the active supported conversation tab
-ChatGPT targeted DOM capture, Claude direct DOM sweep, Gemini direct DOM sweep, or Grok direct DOM sweep
+ChatGPT adaptive DOM sweep, Claude direct DOM sweep, Gemini direct DOM sweep, or Grok direct DOM sweep
   ↓ deterministic serializer
 local LTF document generated in the popup
   ↓ browser download
@@ -94,12 +94,12 @@ The exported frontmatter includes capture diagnostics:
 
 ```yaml
 x_builder: "browser-extension"
-x_capture_adapter: "browser-extension-chatgpt-v2.2"
+x_capture_adapter: "browser-extension-chatgpt-v2.3"
 x_capture_turns: 4
 x_capture_human_turns: 2
 x_capture_ai_turns: 2
 x_capture_code_blocks: 1
-x_capture_strategy: "chatgpt-targeted-turn-sweep"
+x_capture_strategy: "chatgpt-long-page-scroll-sweep"
 x_capture_scroll_complete: true
 ```
 
