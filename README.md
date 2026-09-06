@@ -94,7 +94,7 @@ The exported frontmatter includes capture diagnostics:
 
 ```yaml
 x_builder: "browser-extension"
-x_capture_adapter: "browser-extension-chatgpt-v2.3"
+x_capture_adapter: "browser-extension-chatgpt-v2.5"
 x_capture_turns: 4
 x_capture_human_turns: 2
 x_capture_ai_turns: 2

@@ -1,12 +1,12 @@
 (function () {
-  const CONTENT_VERSION = "2026-09-06-chatgpt-long-page-sweep-v0.1";
+  const CONTENT_VERSION = "2026-09-06-chatgpt-wide-window-sweep-v0.1";
   if (globalThis.__localthinkContentVersion === CONTENT_VERSION) return;
   globalThis.__localthinkContentVersion = CONTENT_VERSION;
   globalThis.__localthinkContentInstalled = true;
 
   const CAPTURE_MESSAGE = "LOCALTHINK_CAPTURE_V6";
   const CAPTURE_ADAPTERS = {
-    chatgpt: "browser-extension-chatgpt-v2.3",
+    chatgpt: "browser-extension-chatgpt-v2.5",
     claude: "browser-extension-claude-v2.1",
     gemini: "browser-extension-gemini-v0.1",
     grok: "browser-extension-grok-v0.1"
@@ -96,7 +96,8 @@
     const seen = new Set();
     const turns = [];
     const addVisibleTurns = () => {
-      for (const turn of extractChatGptTurns({ visibleOnly: true })) {
+      const captureWindowMargin = chatGptCaptureWindowMargin(scroller);
+      for (const turn of extractChatGptTurns({ visibleOnly: true, captureWindowMargin })) {
         const key = turnKey(turn);
         if (key && !seen.has(key)) {
           seen.add(key);
@@ -740,6 +741,11 @@
       .map((value) => Math.round(Number(value) || 0))
       .filter((value) => value >= 0)))
       .sort((a, b) => a - b);
+  }
+
+  function chatGptCaptureWindowMargin(scroller) {
+    const clientHeight = Math.max(1, getClientHeight(scroller));
+    return Math.max(1800, clientHeight * 2.2);
   }
 
   function waitForRender(delay = 180) {
@@ -1499,7 +1505,7 @@
 
   function turnFromRoleNode(node, index, options) {
     const turnContainer = node.closest("[data-testid^='conversation-turn-']") || node;
-    if (options.visibleOnly && !isInCaptureWindow(turnContainer)) return null;
+    if (options.visibleOnly && !isInCaptureWindow(turnContainer, options.captureWindowMargin)) return null;
 
     const text = markdownFromNode(node);
     if (!text) return null;
@@ -1517,13 +1523,16 @@
     };
   }
 
-  function isInCaptureWindow(node) {
+  function isInCaptureWindow(node, margin = null) {
     const rect = node.getBoundingClientRect();
     if (!rect || rect.width <= 0 || rect.height <= 0) return false;
     const style = getComputedStyle(node);
     if (style.display === "none" || style.visibility === "hidden" || Number(style.opacity) === 0) return false;
     const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 800;
-    return rect.bottom >= -240 && rect.top <= viewportHeight + 320;
+    const captureMargin = Number.isFinite(margin) ? Math.max(0, margin) : null;
+    const topMargin = captureMargin ?? 240;
+    const bottomMargin = captureMargin ?? 320;
+    return rect.bottom >= -topMargin && rect.top <= viewportHeight + bottomMargin;
   }
 
   function turnNumberFromNode(node) {
@@ -1575,7 +1584,7 @@
       if (!scrollChatGptTurnIntoView(scroller, turnNumber)) continue;
       for (let attempt = 0; attempt < 3 && !capturedTurnNumbers(turns).has(turnNumber); attempt += 1) {
         await waitForRender(90);
-        addVisibleTurns();
+        await addVisibleTurns();
       }
     }
   }
