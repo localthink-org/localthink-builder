@@ -1,12 +1,12 @@
 (function () {
-  const CONTENT_VERSION = "2026-09-06-chatgpt-wide-window-sweep-v0.1";
+  const CONTENT_VERSION = "2026-10-01-chatgpt-role-label-adapter-v0.1";
   if (globalThis.__localthinkContentVersion === CONTENT_VERSION) return;
   globalThis.__localthinkContentVersion = CONTENT_VERSION;
   globalThis.__localthinkContentInstalled = true;
 
   const CAPTURE_MESSAGE = "LOCALTHINK_CAPTURE_V6";
   const CAPTURE_ADAPTERS = {
-    chatgpt: "browser-extension-chatgpt-v2.5",
+    chatgpt: "browser-extension-chatgpt-v2.6",
     claude: "browser-extension-claude-v2.1",
     gemini: "browser-extension-gemini-v0.1",
     grok: "browser-extension-grok-v0.1"
@@ -84,24 +84,49 @@
   }
 
   async function extractChatGptTurnsDeep() {
-    const scroller = findConversationScroller();
-    const initialTop = getScrollTop(scroller);
-    const initialTurns = extractChatGptTurns({ visibleOnly: false });
-    const targetTurnNumbers = chatGptTurnNumbersInDom();
+    let conversation = findChatGptConversationContext();
+    for (let attempt = 0; !conversation && attempt < 8; attempt += 1) {
+      await waitForRender(200);
+      conversation = findChatGptConversationContext();
+    }
+    if (!conversation) {
+      throw new Error("ChatGPT conversation is still loading or could not be isolated. Wait for the conversation to finish rendering, then try again.");
+    }
+
+    const { root, scroller } = conversation;
+    const initialScrollPosition = captureScrollPosition(scroller);
 
     if (!canScroll(scroller)) {
-      return { turns: initialTurns.map(stripCaptureFields), strategy: "visible-dom" };
+      const turns = extractChatGptTurns({ root, visibleOnly: false });
+      if (!turns.length) {
+        throw new Error("No visible ChatGPT conversation turns were found. Wait for the conversation to finish rendering, then try again.");
+      }
+      return {
+        turns: turns.map(markChatGptTurnMetadata),
+        strategy: "visible-dom",
+        adapter: CAPTURE_ADAPTERS.chatgpt,
+        scrollComplete: true,
+        scrollSteps: 0,
+        scrollTop: Math.round(getScrollTop(scroller)),
+        scrollHeight: Math.round(getScrollHeight(scroller))
+      };
     }
+
+    const historySweep = isColumnReverseScroller(scroller)
+      ? await loadOlderChatGptHistory(scroller)
+      : { scrollComplete: true, scrollSteps: 0 };
+    const initialTurns = extractChatGptTurns({ root, visibleOnly: false });
+    const targetTurnNumbers = chatGptTurnNumbersInDom(root);
 
     const seen = new Set();
     const turns = [];
     const addVisibleTurns = () => {
       const captureWindowMargin = chatGptCaptureWindowMargin(scroller);
-      for (const turn of extractChatGptTurns({ visibleOnly: true, captureWindowMargin })) {
+      for (const turn of extractChatGptTurns({ root, visibleOnly: true, captureWindowMargin })) {
         const key = turnKey(turn);
         if (key && !seen.has(key)) {
           seen.add(key);
-          turns.push(turn);
+          turns.push({ ...turn, _captureOrder: turns.length });
         }
       }
     };
@@ -112,27 +137,29 @@
 
     if (shouldUseChatGptLongPageSweep(scroller, targetTurnNumbers)) {
       const sweep = await sweepChatGptLongPage(scroller, addVisibleTurns);
-      setScrollTop(scroller, initialTop);
+      restoreScrollPosition(scroller, initialScrollPosition);
       return {
-        turns: sortCapturedTurns(turns).map(markDomTurnMetadata),
+        turns: sortCapturedTurns(turns).map(markChatGptTurnMetadata),
         strategy: "chatgpt-long-page-scroll-sweep",
-        scrollComplete: sweep.scrollComplete,
-        scrollSteps: sweep.scrollSteps,
+        adapter: CAPTURE_ADAPTERS.chatgpt,
+        scrollComplete: historySweep.scrollComplete && sweep.scrollComplete,
+        scrollSteps: historySweep.scrollSteps + sweep.scrollSteps,
         scrollTop: Math.round(sweep.scrollTop),
         scrollHeight: Math.round(sweep.scrollHeight)
       };
     }
 
     if (shouldUseKnownChatGptTurnSweep(targetTurnNumbers)) {
-      await sweepKnownChatGptTurns(scroller, targetTurnNumbers, addVisibleTurns, turns);
+      await sweepKnownChatGptTurns(scroller, root, targetTurnNumbers, addVisibleTurns, turns);
       const capturedNumbers = capturedTurnNumbers(turns);
       const missingTargetCount = targetTurnNumbers.filter((number) => !capturedNumbers.has(number)).length;
-      setScrollTop(scroller, initialTop);
+      restoreScrollPosition(scroller, initialScrollPosition);
       return {
-        turns: sortCapturedTurns(turns).map(markDomTurnMetadata),
+        turns: sortCapturedTurns(turns).map(markChatGptTurnMetadata),
         strategy: "chatgpt-targeted-turn-sweep",
-        scrollComplete: missingTargetCount === 0,
-        scrollSteps: targetTurnNumbers.length,
+        adapter: CAPTURE_ADAPTERS.chatgpt,
+        scrollComplete: historySweep.scrollComplete && missingTargetCount === 0,
+        scrollSteps: historySweep.scrollSteps + targetTurnNumbers.length,
         scrollTop: Math.round(getScrollTop(scroller)),
         scrollHeight: Math.round(getScrollHeight(scroller))
       };
@@ -174,21 +201,109 @@
       previousTop = actualTop;
     }
 
-    setScrollTop(scroller, initialTop);
-    const sortedTurns = turns.length ? sortCapturedTurns(turns).map(markDomTurnMetadata) : initialTurns.map(markDomTurnMetadata);
+    restoreScrollPosition(scroller, initialScrollPosition);
+    const sortedTurns = turns.length
+      ? sortCapturedTurns(turns).map(markChatGptTurnMetadata)
+      : initialTurns.map(markChatGptTurnMetadata);
     return {
       turns: sortedTurns,
       strategy: turns.length ? "chatgpt-viewport-turn-sweep" : "visible-dom",
-      scrollComplete,
-      scrollSteps,
+      adapter: CAPTURE_ADAPTERS.chatgpt,
+      scrollComplete: historySweep.scrollComplete && scrollComplete,
+      scrollSteps: historySweep.scrollSteps + scrollSteps,
       scrollTop: Math.round(finalScrollTop),
       scrollHeight: Math.round(finalScrollHeight)
     };
   }
 
+  function findChatGptConversationContext() {
+    const directNodes = Array.from(document.querySelectorAll("[data-message-author-role]"))
+      .map((node) => node.closest("[data-testid^='conversation-turn-']") || node)
+      .filter(isRenderedConversationNode);
+    const labeledNodes = Array.from(document.querySelectorAll("h4.sr-only"))
+      .map((label) => ({ label, role: chatGptRoleFromLabel(label.textContent || label.innerText || "") }))
+      .filter((item) => item.role)
+      .map(({ label, role }) => chatGptLabeledMessageContainer(label, role))
+      .filter(isRenderedConversationNode);
+    const articleNodes = Array.from(document.querySelectorAll("main article"))
+      .filter(isRenderedConversationNode);
+    const anchor = directNodes[0] || labeledNodes[0] || articleNodes[0];
+    if (!anchor) return null;
+
+    const root = anchor.closest(".thread-scroll-container") ||
+      anchor.closest("[role='main']") ||
+      anchor.closest("main") ||
+      anchor;
+    const scroller = nearestScrollableAncestor(anchor) ||
+      (canScroll(root) ? root : null) ||
+      document.scrollingElement ||
+      document.documentElement;
+
+    return { root, anchor, scroller };
+  }
+
+  function isRenderedConversationNode(node) {
+    if (!node?.isConnected || !node.getClientRects?.().length) return false;
+    const rect = node.getBoundingClientRect();
+    if (rect.width <= 0 || rect.height <= 0) return false;
+
+    for (let current = node; current; current = current.parentElement) {
+      const style = getComputedStyle(current);
+      if (
+        current.hidden ||
+        current.inert ||
+        current.getAttribute("aria-hidden") === "true" ||
+        style.display === "none" ||
+        style.visibility === "hidden" ||
+        Number(style.opacity) === 0
+      ) {
+        return false;
+      }
+      if (current === document.body) break;
+    }
+
+    return true;
+  }
+
+  async function loadOlderChatGptHistory(scroller) {
+    const maxAttempts = 120;
+    const stableReadsRequired = 8;
+    let previousHeight = getScrollHeight(scroller);
+    let stableReads = 0;
+    let scrollSteps = 0;
+    let scrollComplete = false;
+
+    for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+      setScrollTop(scroller, 0);
+      await waitForRender(300);
+      const height = getScrollHeight(scroller);
+      const atOlderEdge = getScrollTop(scroller) <= 4;
+      scrollSteps += 1;
+
+      if (height > previousHeight + 4) {
+        previousHeight = height;
+        stableReads = 0;
+      } else if (atOlderEdge) {
+        stableReads += 1;
+      } else {
+        stableReads = 0;
+      }
+
+      if (stableReads >= stableReadsRequired) {
+        scrollComplete = true;
+        break;
+      }
+    }
+
+    return { scrollComplete, scrollSteps };
+  }
+
   function findConversationScroller() {
     const roleNode = document.querySelector([
       "[data-message-author-role]",
+      "h4.sr-only",
+      "[data-chatgpt-search-unit-key]",
+      "[data-content-search-unit-key]",
       "[data-testid='user-message']",
       "[data-testid*='human-message' i]",
       "[data-testid*='assistant' i]",
@@ -201,6 +316,9 @@
       "[class*='message' i]",
       "[class*='response' i]"
     ].join(","));
+    const nearestScroller = nearestScrollableAncestor(roleNode);
+    if (nearestScroller) return nearestScroller;
+
     const candidates = [
       document.scrollingElement,
       document.documentElement,
@@ -216,6 +334,14 @@
       .sort((a, b) => b.score - a.score);
 
     return scrollable[0]?.node || document.scrollingElement || document.documentElement;
+  }
+
+  function nearestScrollableAncestor(node) {
+    for (let ancestor = node?.parentElement; ancestor; ancestor = ancestor.parentElement) {
+      const overflowY = getComputedStyle(ancestor).overflowY || "";
+      if (/auto|scroll|overlay/i.test(overflowY) && canScroll(ancestor)) return ancestor;
+    }
+    return null;
   }
 
   async function extractClaudeTurnsDeep() {
@@ -616,9 +742,14 @@
   }
 
   function getScrollTop(node) {
-    return node === document.scrollingElement || node === document.documentElement || node === document.body
-      ? window.scrollY || document.documentElement.scrollTop || document.body.scrollTop || 0
-      : node.scrollTop;
+    if (node === document.scrollingElement || node === document.documentElement || node === document.body) {
+      return window.scrollY || document.documentElement.scrollTop || document.body.scrollTop || 0;
+    }
+    if (isColumnReverseScroller(node)) {
+      const range = Math.max(0, getScrollHeight(node) - getClientHeight(node));
+      return Math.max(0, Math.min(range, range + node.scrollTop));
+    }
+    return node.scrollTop;
   }
 
   function setScrollTop(node, value) {
@@ -626,9 +757,29 @@
       window.scrollTo(0, value);
       document.documentElement.scrollTop = value;
       document.body.scrollTop = value;
+    } else if (isColumnReverseScroller(node)) {
+      const range = Math.max(0, getScrollHeight(node) - getClientHeight(node));
+      node.scrollTop = value - range;
     } else {
       node.scrollTop = value;
     }
+  }
+
+  function isColumnReverseScroller(node) {
+    if (!node || node === document.scrollingElement || node === document.documentElement || node === document.body) return false;
+    const style = getComputedStyle(node);
+    return style.display.includes("flex") && style.flexDirection === "column-reverse";
+  }
+
+  function captureScrollPosition(node) {
+    return isColumnReverseScroller(node)
+      ? { reverse: true, top: node.scrollTop }
+      : { reverse: false, top: getScrollTop(node) };
+  }
+
+  function restoreScrollPosition(node, position) {
+    if (position.reverse && node) node.scrollTop = position.top;
+    else setScrollTop(node, position.top);
   }
 
   function getScrollHeight(node) {
@@ -763,27 +914,121 @@
   }
 
   function extractChatGptTurns(options = {}) {
-    const roleNodes = Array.from(document.querySelectorAll("[data-message-author-role]"));
+    const root = options.root || document;
+    const roleNodes = Array.from(root.querySelectorAll("[data-message-author-role]"));
+    const directTurns = roleNodes
+      .map((node, index) => turnFromRoleNode(node, index, options))
+      .filter(Boolean)
+      .sort(compareCapturedTurns)
+      .filter((turn) => turn.text);
+    if (directTurns.length) return directTurns;
 
-    if (roleNodes.length) {
-      return roleNodes
-        .map((node, index) => turnFromRoleNode(node, index, options))
-        .filter(Boolean)
-        .sort(compareCapturedTurns)
-        .filter((turn) => turn.text);
-    }
+    const labeledTurns = extractChatGptTurnsFromRoleLabels(options);
+    if (labeledTurns.length) return labeledTurns;
 
-    const articles = Array.from(document.querySelectorAll("main article"));
+    const articles = Array.from(root.querySelectorAll("main article"))
+      .filter((article) => isRenderedConversationNode(article) &&
+        (!options.visibleOnly || isInCaptureWindow(article, options.captureWindowMargin)));
     if (articles.length) {
       return articles
         .map((article, index) => ({
           role: inferRoleFromArticle(article, index),
-          text: markdownFromNode(article)
+          text: markdownFromNode(article),
+          _absoluteTop: absoluteTopForNode(article)
         }))
         .filter((turn) => turn.text);
     }
 
     return [];
+  }
+
+  function extractChatGptTurnsFromRoleLabels(options = {}) {
+    const root = options.root || document;
+    return Array.from(root.querySelectorAll("h4.sr-only"))
+      .map((label, index) => {
+        const role = chatGptRoleFromLabel(label.textContent || label.innerText || "");
+        if (!role) return null;
+
+        const container = chatGptLabeledMessageContainer(label, role);
+        if (
+          !container ||
+          !isRenderedConversationNode(container) ||
+          (options.visibleOnly && !isInCaptureWindow(container, options.captureWindowMargin))
+        ) {
+          return null;
+        }
+
+        const text = markdownFromNode(container);
+        if (!isUsefulTurn(text)) return null;
+
+        const absoluteTop = absoluteTopForNode(container);
+        const unitKey = chatGptAttributeInAncestors(container, [
+          "data-chatgpt-search-unit-key",
+          "data-content-search-unit-key"
+        ]);
+        const messageId = chatGptAttributeInAncestors(container, [
+          "data-message-id",
+          "data-chatgpt-search-message-ids"
+        ]);
+
+        return {
+          role,
+          text,
+          _turnNumber: Number.POSITIVE_INFINITY,
+          _absoluteTop: absoluteTop,
+          _messageId: messageId,
+          _turnId: unitKey,
+          _captureKey: `chatgpt-label:${unitKey || messageId || `${role}:${index}:${Math.round(absoluteTop / 20)}`}`
+        };
+      })
+      .filter(Boolean)
+      .sort(compareCapturedTurns);
+  }
+
+  function chatGptRoleFromLabel(value) {
+    const label = cleanText(value).replace(/[：:]+$/, "").toLocaleLowerCase();
+    if (/^(?:you said|you wrote|user|human|你說|你说)$/.test(label)) return "human";
+    if (/^(?:chatgpt(?:\s+(?:said|says))?|assistant|ai|chatgpt\s*[說说])$/.test(label)) return "assistant";
+    return null;
+  }
+
+  function chatGptLabeledMessageContainer(label, role) {
+    const ancestors = [];
+    for (let node = label.parentElement, depth = 0; node && depth < 8; node = node.parentElement, depth += 1) {
+      ancestors.push(node);
+      const key = chatGptRoleFromUnitKey(chatGptSearchUnitKey(node));
+      if (key === role) return node;
+    }
+
+    const parent = label.parentElement;
+    if (parent) {
+      const descendants = Array.from(parent.querySelectorAll("[data-chatgpt-search-unit-key], [data-content-search-unit-key]"));
+      const matching = descendants.find((node) => chatGptRoleFromUnitKey(chatGptSearchUnitKey(node)) === role);
+      if (matching) return matching;
+    }
+
+    return ancestors[0] || label;
+  }
+
+  function chatGptSearchUnitKey(node) {
+    return node?.getAttribute?.("data-chatgpt-search-unit-key") ||
+      node?.getAttribute?.("data-content-search-unit-key") ||
+      "";
+  }
+
+  function chatGptRoleFromUnitKey(value) {
+    const match = String(value || "").match(/:(user|assistant)$/i);
+    return match ? (match[1].toLowerCase() === "user" ? "human" : "assistant") : null;
+  }
+
+  function chatGptAttributeInAncestors(node, attributes) {
+    for (let current = node, depth = 0; current && depth < 8; current = current.parentElement, depth += 1) {
+      for (const attribute of attributes) {
+        const value = current.getAttribute?.(attribute);
+        if (value) return value;
+      }
+    }
+    return "";
   }
 
   function extractClaudeTurns(options = {}) {
@@ -1505,6 +1750,8 @@
 
   function turnFromRoleNode(node, index, options) {
     const turnContainer = node.closest("[data-testid^='conversation-turn-']") || node;
+    if (!isRenderedConversationNode(turnContainer)) return null;
+    if (options.root && options.root !== document && !options.root.contains(turnContainer)) return null;
     if (options.visibleOnly && !isInCaptureWindow(turnContainer, options.captureWindowMargin)) return null;
 
     const text = markdownFromNode(node);
@@ -1561,6 +1808,11 @@
   }
 
   function compareCapturedTurns(a, b) {
+    const aOrder = a._captureOrder;
+    const bOrder = b._captureOrder;
+    if (Number.isFinite(aOrder) && Number.isFinite(bOrder) && aOrder !== bOrder) {
+      return aOrder - bOrder;
+    }
     const aTurn = a._turnNumber ?? Number.POSITIVE_INFINITY;
     const bTurn = b._turnNumber ?? Number.POSITIVE_INFINITY;
     if (Number.isFinite(aTurn) && Number.isFinite(bTurn) && aTurn !== bTurn) return aTurn - bTurn;
@@ -1571,17 +1823,17 @@
     return 0;
   }
 
-  function chatGptTurnNumbersInDom() {
-    return Array.from(new Set(Array.from(document.querySelectorAll("[data-testid^='conversation-turn-']"))
+  function chatGptTurnNumbersInDom(root = document) {
+    return Array.from(new Set(Array.from(root.querySelectorAll("[data-testid^='conversation-turn-']"))
       .map((node) => turnNumberFromNode(node))
       .filter((number) => Number.isFinite(number))))
       .sort((a, b) => a - b);
   }
 
-  async function sweepKnownChatGptTurns(scroller, turnNumbers, addVisibleTurns, turns) {
+  async function sweepKnownChatGptTurns(scroller, root, turnNumbers, addVisibleTurns, turns) {
     for (const turnNumber of turnNumbers) {
       if (capturedTurnNumbers(turns).has(turnNumber)) continue;
-      if (!scrollChatGptTurnIntoView(scroller, turnNumber)) continue;
+      if (!scrollChatGptTurnIntoView(scroller, turnNumber, root)) continue;
       for (let attempt = 0; attempt < 3 && !capturedTurnNumbers(turns).has(turnNumber); attempt += 1) {
         await waitForRender(90);
         await addVisibleTurns();
@@ -1589,8 +1841,8 @@
     }
   }
 
-  function scrollChatGptTurnIntoView(scroller, turnNumber) {
-    const node = document.querySelector(`[data-testid="conversation-turn-${turnNumber}"]`);
+  function scrollChatGptTurnIntoView(scroller, turnNumber, root = document) {
+    const node = root.querySelector(`[data-testid="conversation-turn-${turnNumber}"]`);
     if (!node) return false;
 
     try {
@@ -1628,6 +1880,12 @@
     if (turn._messageId) cleanTurn.captureMessageId = turn._messageId;
     if (turn._turnId) cleanTurn.captureTurnId = turn._turnId;
     return cleanTurn;
+  }
+
+  function markChatGptTurnMetadata(turn, index) {
+    return Number.isFinite(turn._turnNumber)
+      ? markDomTurnMetadata(turn)
+      : markSequentialTurnMetadata(turn, index);
   }
 
   function markSequentialTurnMetadata(turn, index) {
@@ -1725,6 +1983,7 @@
       "[aria-label*='Show more' i]",
       "[aria-label*='Show less' i]",
       ".cdk-visually-hidden",
+      "h4.sr-only",
       "[class*='screen-reader']"
     ]) {
       for (const node of Array.from(root.querySelectorAll(selector))) {
