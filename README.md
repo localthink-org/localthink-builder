@@ -2,6 +2,9 @@
 
 Chrome extension for exporting ChatGPT, Claude, Gemini, and Grok conversations as LocalThink Format (`.ltf.md`) files.
 
+[![Chrome Web Store](https://img.shields.io/chrome-web-store/v/icpjoemgdpkmllkngcpndocnalodhfaj)](https://chromewebstore.google.com/detail/ltf-builder/icpjoemgdpkmllkngcpndocnalodhfaj)
+[![License: MIT](https://img.shields.io/github/license/localthink-org/localthink-builder)](LICENSE)
+
 [Install from the Chrome Web Store](https://chromewebstore.google.com/detail/ltf-builder/icpjoemgdpkmllkngcpndocnalodhfaj)
 
 This version is intentionally conservative:
@@ -34,6 +37,10 @@ After installation:
 4. Edit metadata if needed.
 5. Click **Download .ltf.md**.
 
+Open the exported `.ltf.md` file in LocalThink for Mac:
+
+[Open exports in LocalThink for Mac](https://localthink.ai/download)
+
 ---
 
 ## Local Development
@@ -54,6 +61,10 @@ localthink-builder
 9. Click **Capture**.
 10. Edit metadata if needed.
 11. Click **Download .ltf.md**.
+
+Open the exported `.ltf.md` file in LocalThink for Mac:
+
+[Open exports in LocalThink for Mac](https://localthink.ai/download)
 
 ---
 
@@ -147,6 +158,7 @@ LTF Builder is released under the [MIT License](LICENSE).
 
 - Chrome Web Store: https://chromewebstore.google.com/detail/ltf-builder/icpjoemgdpkmllkngcpndocnalodhfaj
 - Product page: https://localthink.org/ltf-builder
+- LocalThink for Mac: https://localthink.ai/download
 - LocalThink Format: https://github.com/localthink-org/localthink-format
 - Privacy Policy: https://localthink.ai/privacy
 - X: https://x.com/localthinkai
